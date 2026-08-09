@@ -14,6 +14,7 @@ mod blocks;
 mod candle_cakes;
 mod common;
 mod entities;
+mod flower_pots;
 mod items;
 mod strippables;
 mod waxables;
@@ -51,6 +52,10 @@ pub fn main() {
     write_if_changed(
         format!("{behavior_out_dir}/items.rs"),
         items::build(&classes.items),
+    );
+    write_if_changed(
+        format!("{behavior_out_dir}/flower_pots.rs"),
+        flower_pots::build(&classes.blocks),
     );
     write_if_changed(format!("{behavior_out_dir}/waxables.rs"), waxables::build());
     write_if_changed(

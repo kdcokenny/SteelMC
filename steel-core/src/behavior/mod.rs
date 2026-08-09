@@ -42,6 +42,11 @@ pub mod block_behaviors;
 #[path = "generated/candle_cakes.rs"]
 pub mod candle_cakes;
 
+#[expect(warnings)]
+#[rustfmt::skip]
+#[path = "generated/flower_pots.rs"]
+pub mod flower_pots;
+
 #[allow(warnings)]
 #[rustfmt::skip]
 #[path = "generated/items.rs"]
