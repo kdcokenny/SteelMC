@@ -43,7 +43,7 @@ const BASE_CHANCE: f32 = 0.056_888_89;
 /// Add this as a field to block implementations that should support weathering.
 ///
 /// In `YourBlock::random_tick` call [`WeatheringCopper::change_over_time`]
-// TODO: Add weathering support for lanterns, chests, golem statues, and lightning rods.
+// TODO: Add weathering support for chests, golem statues, and lightning rods.
 pub struct WeatheringCopper {
     weather_state: WeatherState,
 }
