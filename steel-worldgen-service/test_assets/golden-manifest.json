@@ -1,0 +1,24 @@
+{
+  "artifact_bytes": 4428,
+  "artifact_sha256": "f7edf08d694f316f1b0d3a8a9b9299316ee510eea4bf400bf1f65ad71016b795",
+  "build": {
+    "cargo_id": "cargo 1.99.0-nightly (3efb1f477 2026-07-17) | release: 1.99.0-nightly | commit-hash: 3efb1f477e99b42974b982d939fd100303cdf7db | commit-date: 2026-07-17 | host: x86_64-unknown-linux-gnu | libgit2: 1.9.4 (sys:0.21.0 vendored) | libcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:OpenSSL/3.6.3) | ssl: OpenSSL 3.6.3 9 Jun 2026 | os: Ubuntu 26.4.0 (resolute) [64-bit]",
+    "configuration": "profile=release;opt=3;debug=false;debug_assertions=false;overflow_checks=true;ub_checks=true;panic=unwind;relocation=pic;target_features=fxsr,sse,sse2,x87;rustflags=-Clink-arg=-fuse-ld=lld | -Zthreads=0",
+    "external_build_id": "d3e0d980baeda2ac54aa67a34d99b6fa3154b598",
+    "license": "AGPL-3.0-or-later",
+    "rustc_id": "rustc 1.99.0-nightly (6f72b5dd5 2026-07-22) | binary: rustc | commit-hash: 6f72b5dd5f82226a2773d40efea7bab941892a73 | commit-date: 2026-07-22 | host: x86_64-unknown-linux-gnu | release: 1.99.0-nightly | LLVM version: 22.1.8",
+    "source_sha256": "d75a818c94018c48dbbe7e7dcad5287b7eb5e33130e76b00aa8d3d41d81fc0d4",
+    "source_url": "https://github.com/Steel-Foundation/SteelMC/tree/d3e0d980baeda2ac54aa67a34d99b6fa3154b598",
+    "target": "x86_64-unknown-linux-gnu"
+  },
+  "chunk": [
+    -6,
+    2
+  ],
+  "generator_sha256": "93c8aaf8137ecfeb5cf654e5fe3330107a44f0ac39adbbdaee694fbb91228516",
+  "profile_sha256": "04f733c3656907d5c33c00267445bd1cff4efe905c2f900668df7a5d5d0c7f56",
+  "registry_sha256": "2c6bc18babbf7b365e611b7547a6bef7123e42696b8bee29c06300f530698d26",
+  "requested_build_id": "d3e0d980baeda2ac54aa67a34d99b6fa3154b598",
+  "schema": "steel-worldgen-golden-v1",
+  "seed": 13579
+}
