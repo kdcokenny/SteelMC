@@ -160,14 +160,10 @@ impl Random for LegacyRandom {
     }
 
     fn next_f64(&mut self) -> f64 {
-        // Matches vanilla's BitRandomSource.nextDouble():
-        //   double DOUBLE_MULTIPLIER = 1.110223E-16F;  // stored as double = 2^-53
-        //   return combined * DOUBLE_MULTIPLIER;
-        // The field is declared double; the float literal `1.110223E-16F` is widened to
-        // double at compile time (= exactly 2^-53). javac inlines static final interface
-        // fields, so the bytecode uses `ldc2_w (double)` → double multiplication.
+        // Folia/Paper 26.2 compiles BitRandomSource.nextDouble's long × float
+        // expression as float multiplication before widening the result to double.
         let combined = (i64::from(self.next(26)) << 27) + i64::from(self.next(27));
-        combined as f64 * (1.0 / (1_i64 << 53) as f64)
+        f64::from(combined as f32 * 1.110_223e-16_f32)
     }
 
     fn next_bool(&mut self) -> bool {
@@ -292,20 +288,19 @@ mod test {
     fn test_next_f64() {
         let mut rand = LegacyRandom::from_seed(0);
 
-        // Values match vanilla's BitRandomSource.nextDouble():
-        //   double DOUBLE_MULTIPLIER = 1.110223E-16F;  // stored as double = 2^-53
-        //   return combined * DOUBLE_MULTIPLIER;        // double multiplication
+        // Values match Folia/Paper 26.2's compiled
+        // BitRandomSource.nextDouble float multiplication.
         let values = [
-            0.730_967_787_376_657,
-            0.240_536_415_671_485_87,
-            0.637_417_425_350_108_3,
-            0.550_437_005_117_633_9,
-            0.597_545_277_797_201_8,
-            0.333_218_399_476_649_8,
-            0.385_189_184_740_718_5,
-            0.984_841_540_199_809,
-            0.879_182_517_872_480_1,
-            0.941_249_179_482_114_4,
+            0.730_967_760_086_059_6,
+            0.240_536_421_537_399_3,
+            0.637_417_435_646_057_1,
+            0.550_437_033_176_422_1,
+            0.597_545_266_151_428_2,
+            0.333_218_395_709_991_46,
+            0.385_189_175_605_773_9,
+            0.984_841_525_554_657,
+            0.879_182_517_528_533_9,
+            0.941_249_191_761_016_8,
         ];
 
         for value in values {

@@ -110,7 +110,7 @@ impl Random for WorldgenRandom {
 
     fn next_f64(&mut self) -> f64 {
         let combined = ((self.next_bits(26) as i64) << 27) + self.next_bits(27) as i64;
-        combined as f64 * (1.0 / (1_i64 << 53) as f64)
+        f64::from(combined as f32 * 1.110_223e-16_f32)
     }
 
     fn next_bool(&mut self) -> bool {

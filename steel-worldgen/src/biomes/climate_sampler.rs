@@ -212,3 +212,34 @@ fn overworld_spawn_targets() -> [ParameterPoint; 2] {
         ),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{OverworldClimateSampler, OverworldColumnCache};
+
+    #[test]
+    fn climate_targets_match_folia_26_2_boundary_vectors() {
+        let sampler = OverworldClimateSampler::new(13_579);
+        let vectors = [
+            ((127, 4, 9), (6315, 2812, -1585, -3165, 4188, 2152)),
+            ((129, -3, 9), (6330, 2818, -1676, -3125, 5818, 2469)),
+        ];
+
+        for ((x, y, z), expected) in vectors {
+            let mut cache = OverworldColumnCache::new();
+            let target = sampler.sample(x, y, z, &mut cache);
+            assert_eq!(
+                (
+                    target.temperature,
+                    target.humidity,
+                    target.continentalness,
+                    target.erosion,
+                    target.depth,
+                    target.weirdness,
+                ),
+                expected,
+                "climate mismatch at quart position ({x}, {y}, {z})",
+            );
+        }
+    }
+}
