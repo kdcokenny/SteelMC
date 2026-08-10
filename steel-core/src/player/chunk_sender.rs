@@ -28,8 +28,8 @@ use crate::{
 
 /// Minimum chunks per tick (vanilla: 0.01)
 const MIN_CHUNKS_PER_TICK: f32 = 0.1f32;
-/// Maximum chunks per tick (vanilla: 64.0, we use 500.0 for faster loading)
-const MAX_CHUNKS_PER_TICK: f32 = 500.0;
+/// Maximum chunks per tick (vanilla: 64.0)
+const MAX_CHUNKS_PER_TICK: f32 = 64.0;
 /// Starting chunks per tick (vanilla: 9.0)
 const START_CHUNKS_PER_TICK: f32 = 9.0;
 /// Maximum unacknowledged batches after first ack (vanilla: 10)
@@ -353,7 +353,7 @@ impl ChunkSender {
 
         self.unacknowledged_batches = self.unacknowledged_batches.saturating_sub(1);
 
-        // Handle NaN and clamp to valid range (vanilla uses 0.01-64, we use 0.01-500)
+        // Handle NaN and clamp client feedback to the supported pacing range.
         self.desired_chunks_per_tick = if desired_chunks_per_tick.is_nan() {
             MIN_CHUNKS_PER_TICK
         } else {
@@ -607,6 +607,17 @@ mod tests {
             sender.max_unacknowledged_batches,
             MAX_UNACKNOWLEDGED_BATCHES
         );
+    }
+
+    #[test]
+    fn chunk_batch_ack_clamps_requested_rate_to_vanilla_maximum() {
+        let mut sender = ChunkSender {
+            unacknowledged_batches: 1,
+            ..ChunkSender::default()
+        };
+
+        assert!(sender.on_chunk_batch_received_by_client(500.0));
+        assert_eq!(sender.desired_chunks_per_tick.to_bits(), 64.0_f32.to_bits());
     }
 
     #[test]
