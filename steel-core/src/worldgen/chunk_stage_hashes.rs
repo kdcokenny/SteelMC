@@ -266,6 +266,7 @@ fn create_test_world(
                 sea_level,
                 default_gamemode: GameType::Survival,
                 difficulty: Difficulty::Normal,
+                generation_status_ceiling: None,
             },
             generation_pool,
         ))

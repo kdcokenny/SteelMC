@@ -580,6 +580,7 @@ fn build_feature_fixture_at(
         sea_level: output.sea_level,
         default_gamemode: GameType::Survival,
         difficulty: Difficulty::Normal,
+        generation_status_ceiling: None,
     };
     let world_key = Identifier::new("bench", format!("{}_features", generator_key.path));
     let world = chunk_runtime
@@ -850,6 +851,7 @@ fn build_concurrent_feature_fixture(
         sea_level: output.sea_level,
         default_gamemode: GameType::Survival,
         difficulty: Difficulty::Normal,
+        generation_status_ceiling: None,
     };
     let world_key = Identifier::new(
         "bench",
@@ -940,6 +942,7 @@ fn build_concurrent_full_pipeline_fixture(
         sea_level: output.sea_level,
         default_gamemode: GameType::Survival,
         difficulty: Difficulty::Normal,
+        generation_status_ceiling: None,
     };
     let world_key = Identifier::new(
         "bench",
@@ -1034,6 +1037,7 @@ fn build_concurrent_light_fixture(
         sea_level: output.sea_level,
         default_gamemode: GameType::Survival,
         difficulty: Difficulty::Normal,
+        generation_status_ceiling: None,
     };
     let world_key = Identifier::new("bench", format!("{}_light_concurrent", generator_key.path));
     let world = chunk_runtime

@@ -328,24 +328,27 @@ impl ChunkGenerationTask {
 
     /// Runs the generation task loop.
     pub async fn run(self: Arc<Self>) {
-        loop {
-            tokio::select! {
-                () = self.cancel_token.cancelled() => break,
-                () = self.wait_for_scheduled_layers() => {}
+        let succeeded = loop {
+            let layers_ready = tokio::select! {
+                () = self.cancel_token.cancelled() => break false,
+                layers_ready = self.wait_for_scheduled_layers() => layers_ready,
+            };
+            if !layers_ready {
+                break false;
             }
 
             if *self.scheduled_status.lock() == Some(self.target_status) {
-                break;
+                break true;
             }
 
             self.schedule_next_layer();
-        }
+        };
         let center_chunk = self.cache.get(self.pos.0.x, self.pos.0.y);
-        center_chunk.clear_generation_task_if_current(&self);
+        center_chunk.finish_generation_task_if_current(&self, !succeeded);
     }
 
     /// Waits for all scheduled neighbor tasks to complete.
-    pub async fn wait_for_scheduled_layers(&self) {
+    pub async fn wait_for_scheduled_layers(&self) -> bool {
         // Collect all futures first to avoid locking the mutex during await
         let futures: Vec<_> = {
             let mut lock = self.neighbor_ready.lock();
@@ -353,16 +356,12 @@ impl ChunkGenerationTask {
         };
 
         if futures.is_empty() {
-            return;
+            return true;
         }
 
-        let results = join_all(futures).await;
-
-        for result in results {
-            if result.is_none() {
-                self.cancel();
-                break;
-            }
-        }
+        join_all(futures)
+            .await
+            .into_iter()
+            .all(|result| result.is_some())
     }
 }

@@ -1,8 +1,8 @@
 //! Build script for steel-utils that generates translation constants.
 
 use reqwest::blocking::{self, Response};
-use serde::Deserialize;
-use sha1::{Digest, Sha1};
+use sha1::{Digest as _, Sha1};
+use sha2::Sha256;
 use std::{
     env,
     fmt::Write as _,
@@ -29,33 +29,19 @@ const ENTITY_EVENTS: &str = "entity_events";
 const VERSION: &str = "version";
 const ASSET_LOCK_TIMEOUT: Duration = Duration::from_mins(5);
 
-#[derive(Deserialize)]
-struct VersionManifest {
-    versions: Vec<VersionEntry>,
-}
-
-#[derive(Deserialize)]
-struct VersionEntry {
-    id: String,
-    url: String,
-}
-
-#[derive(Deserialize)]
-struct VersionDetails {
-    downloads: Downloads,
-}
-
-#[derive(Deserialize)]
-struct Downloads {
-    server: DownloadEntry,
-}
-
-#[derive(Deserialize)]
 struct DownloadEntry {
-    sha1: String,
+    sha1: &'static str,
+    sha256: &'static str,
     size: u64,
-    url: String,
+    url: &'static str,
 }
+
+const MC_26_2_SERVER: DownloadEntry = DownloadEntry {
+    sha1: "823e2250d24b3ddac457a60c92a6a941943fcd6a",
+    sha256: "cdacdfb25898de5e4b4b0e5ddcc2722f77067e46605709c2d886c000ebb63ec5",
+    size: 60_894_273,
+    url: "https://piston-data.mojang.com/v1/objects/823e2250d24b3ddac457a60c92a6a941943fcd6a/server.jar",
+};
 
 fn get_target_mc_version() -> String {
     let pkg_version = env::var("CARGO_PKG_VERSION")
@@ -65,21 +51,6 @@ fn get_target_mc_version() -> String {
     } else {
         panic!("CARGO_PKG_VERSION does not contain +mc suffix: {pkg_version}");
     }
-}
-
-fn fetch_version_manifest() -> VersionManifest {
-    let manifest_url = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
-    blocking::get(manifest_url)
-        .unwrap_or_else(|e| panic!("Failed to fetch version manifest from {manifest_url}: {e}"))
-        .json::<VersionManifest>()
-        .expect("Failed to parse version manifest JSON")
-}
-
-fn fetch_version_details(version_url: &str, target_ver: &str) -> VersionDetails {
-    blocking::get(version_url)
-        .unwrap_or_else(|e| panic!("Failed to fetch version details for {target_ver}: {e}"))
-        .json::<VersionDetails>()
-        .expect("Failed to parse version details JSON")
 }
 
 struct AssetLock {
@@ -147,6 +118,16 @@ fn sha1_hex(data: &[u8]) -> String {
     out
 }
 
+fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let mut out = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
 fn validate_downloaded_server_jar(
     data: &[u8],
     download: &DownloadEntry,
@@ -162,10 +143,17 @@ fn validate_downloaded_server_jar(
     }
 
     let actual_sha1 = sha1_hex(data);
-    if !actual_sha1.eq_ignore_ascii_case(&download.sha1) {
+    if !actual_sha1.eq_ignore_ascii_case(download.sha1) {
         return Err(format!(
             "Downloaded server jar for {target_ver} has SHA-1 {actual_sha1}, expected {}",
             download.sha1
+        ));
+    }
+    let actual_sha256 = sha256_hex(data);
+    if !actual_sha256.eq_ignore_ascii_case(download.sha256) {
+        return Err(format!(
+            "Downloaded server jar for {target_ver} has SHA-256 {actual_sha256}, expected {}",
+            download.sha256
         ));
     }
 
@@ -174,7 +162,7 @@ fn validate_downloaded_server_jar(
 
 fn download_server_jar(download: &DownloadEntry, target_ver: &str) -> Vec<u8> {
     println!("cargo:warning=Downloading server jar for {target_ver}...");
-    let mut jar_resp = blocking::get(&download.url)
+    let mut jar_resp = blocking::get(download.url)
         .and_then(Response::error_for_status)
         .unwrap_or_else(|e| panic!("Failed to download server jar from {}: {e}", download.url));
 
@@ -189,15 +177,13 @@ fn download_server_jar(download: &DownloadEntry, target_ver: &str) -> Vec<u8> {
 }
 
 fn download_server_jar_for_version(target_ver: &str) -> Vec<u8> {
-    let manifest = fetch_version_manifest();
-    let version_entry = manifest
-        .versions
-        .iter()
-        .find(|v| v.id == target_ver)
-        .unwrap_or_else(|| panic!("Minecraft version {target_ver} not found in version manifest"));
-
-    let details = fetch_version_details(&version_entry.url, target_ver);
-    download_server_jar(&details.downloads.server, target_ver)
+    let download = match target_ver {
+        "26.2" => &MC_26_2_SERVER,
+        _ => panic!(
+            "Minecraft {target_ver} has no pinned server asset; add its immutable URL, size, SHA-1, and SHA-256"
+        ),
+    };
+    download_server_jar(download, target_ver)
 }
 
 fn get_server_archive(jar_data: Vec<u8>) -> zip::ZipArchive<Cursor<Vec<u8>>> {

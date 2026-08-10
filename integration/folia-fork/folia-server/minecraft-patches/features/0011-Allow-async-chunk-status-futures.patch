@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SteelMC contributors <noreply@steelmc.dev>
+Date: Mon, 10 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Allow asynchronous chunk status futures
+
+Status implementations such as a remote NOISE importer must be able to
+complete without blocking a Moonrise generation executor. A cancellation
+that races a running status suppresses publication but deliberately keeps
+chunk protections until the physical status future drains.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java
+@@ -95,13 +95,13 @@
+                     this.complete(chunk, null);
+                     return;
+                 }
+                 completeFuture = ChunkPyramid.GENERATION_PYRAMID.getStepTo(this.toStatus).apply(ctx, this.neighbours, this.fromChunk)
+-                        .whenComplete((final ChunkAccess either, final Throwable throwable) -> {
+-                                    if (either instanceof ProtoChunk proto) {
+-                                        proto.setPersistedStatus(ChunkUpgradeGenericStatusTask.this.toStatus);
+-                                    }
+-                                }
+-                        );
++                        .thenApply((final ChunkAccess either) -> {
++                            if (either instanceof ProtoChunk proto) {
++                                proto.setPersistedStatus(ChunkUpgradeGenericStatusTask.this.toStatus);
++                            }
++                            return either;
++                        });
+             } else {
+                 if (((ChunkSystemChunkStatus)this.toStatus).moonrise$isEmptyLoadStatus()) {
+                     completing = true;
+@@ -134,28 +134,29 @@
+             LOGGER.warn("Future status not complete after scheduling: " + this.toStatus.toString() + ", generate: " + generation);
+         }
+ 
+-        final ChunkAccess newChunk;
+-
+-        try {
+-            newChunk = completeFuture.join();
+-        } catch (final Throwable throwable) {
+-            this.complete(null, throwable);
+-            return;
+-        }
+-
+-        if (newChunk == null) {
+-            this.complete(null,
+-                    new IllegalStateException(
+-                            "Chunk for status: " + ChunkUpgradeGenericStatusTask.this.toStatus.toString()
+-                                    + ", generation: " + generation + " should not be null! Future: " + completeFuture
+-                    ).fillInStackTrace()
+-            );
+-            return;
+-        }
+-
+-        this.complete(newChunk, null);
+-    }
+-
++        completeFuture.whenComplete((final ChunkAccess newChunk, final Throwable throwable) -> {
++            if (this.cancelled) {
++                this.complete(null, null);
++                return;
++            }
++            if (throwable != null) {
++                this.complete(null, throwable);
++                return;
++            }
++            if (newChunk == null) {
++                this.complete(null,
++                        new IllegalStateException(
++                                "Chunk for status: " + ChunkUpgradeGenericStatusTask.this.toStatus.toString()
++                                        + ", generation: " + generation + " should not be null! Future: " + completeFuture
++                        ).fillInStackTrace()
++                );
++                return;
++            }
++            this.complete(newChunk, null);
++        });
++    }
++
++    private volatile boolean cancelled;
+     private volatile boolean scheduled;
+     private static final VarHandle SCHEDULED_HANDLE = ConcurrentUtil.getVarHandle(ChunkUpgradeGenericStatusTask.class, "scheduled", boolean.class);
+ 
+@@ -180,6 +181,7 @@
+ 
+     @Override
+     public void cancel() {
++        this.cancelled = true;
+         if (this.generateTask.cancel()) {
+             this.complete(null, null);
+         }

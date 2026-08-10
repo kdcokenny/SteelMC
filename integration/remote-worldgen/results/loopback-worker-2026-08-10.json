@@ -1,0 +1,59 @@
+{
+  "concurrency": 16,
+  "endpoint": "http://127.0.0.1:50074",
+  "jobs": 100,
+  "minecraft_version": "26.2",
+  "ok": true,
+  "passes": [
+    {
+      "artifact_bytes": 668957,
+      "cache_hits": 0,
+      "chunks_per_second": 55.62581751456162,
+      "elapsed_micros": 1797726,
+      "kind": "cold",
+      "latency_micros": {
+        "max": 306394,
+        "min": 29498,
+        "p50": 284738,
+        "p95": 298916,
+        "p99": 304611
+      },
+      "pass": 0,
+      "worker_stage_micros": {
+        "encode_total": 833037,
+        "generation_total": 960398,
+        "queue_total": 24673774
+      }
+    },
+    {
+      "artifact_bytes": 668957,
+      "cache_hits": 100,
+      "chunks_per_second": 1618.6586014304085,
+      "elapsed_micros": 61779,
+      "kind": "warm",
+      "latency_micros": {
+        "max": 12077,
+        "min": 747,
+        "p50": 4700,
+        "p95": 9052,
+        "p99": 11362
+      },
+      "pass": 1,
+      "worker_stage_micros": {
+        "encode_total": 0,
+        "generation_total": 0,
+        "queue_total": 0
+      }
+    }
+  ],
+  "profile_sha256": "2fd09b3262ac0d93279500a88ad7209340f1bec322ac5888f7d7c8fdba4570de",
+  "steel_version": "0.15.2+mc26.2",
+  "worker_metrics": {
+    "cache_hits": 100,
+    "cancelled": 0,
+    "failed": 0,
+    "in_flight": 0,
+    "requests": 200,
+    "succeeded": 200
+  }
+}

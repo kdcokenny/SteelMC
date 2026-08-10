@@ -1,0 +1,19 @@
+worker:
+  endpoint: "http://127.0.0.1:50051"
+  plaintext: true
+  tls:
+    ca-certificate: ""
+    client-certificate: ""
+    client-key: ""
+    domain: ""
+  deadline-millis: 30000
+  expected-minecraft-version: "26.2"
+  expected-profile-sha256: ""
+  allow-unpinned-profile: false
+cache:
+  max-chunks: 2048
+  max-bytes: 268435456
+prototype:
+  # The public ChunkGenerator API cannot import aquifer post-processing offsets.
+  # Keep false unless deliberately running the non-production projection demo.
+  allow-unapplied-postprocessing: false

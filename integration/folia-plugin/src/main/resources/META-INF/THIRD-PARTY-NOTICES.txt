@@ -1,0 +1,19 @@
+SteelRemoteWorldGen shaded runtime dependencies
+
+Apache-2.0:
+- gRPC Java 1.83.1 (including shaded Netty), https://github.com/grpc/grpc-java
+- Google common protos 2.64.1, https://github.com/googleapis/java-common-protos
+- Guava 33.6.0-android and FailureAccess 1.0.3, https://github.com/google/guava
+- Gson 2.14.0, https://github.com/google/gson
+- PerfMark 0.27.0, https://github.com/perfmark/perfmark
+- Error Prone annotations 2.50.0, https://github.com/google/error-prone
+- JSpecify 1.0.0, https://github.com/jspecify/jspecify
+- J2ObjC annotations 3.1, https://github.com/google/j2objc
+- Animal Sniffer annotations 1.27, https://www.mojohaus.org/animal-sniffer
+- JSR-305 3.0.2, https://github.com/amaembo/jsr-305
+
+BSD-3-Clause:
+- Protocol Buffers Java 3.25.9, https://github.com/protocolbuffers/protobuf
+
+Empty compatibility/annotation artifacts in the resolved graph are covered by their upstream notices.
+Full versions and artifact SHA-256 values are pinned by gradle.lockfile and gradle/verification-metadata.xml in the corresponding source.

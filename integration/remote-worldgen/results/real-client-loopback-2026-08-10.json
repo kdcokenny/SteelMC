@@ -1,0 +1,95 @@
+{
+  "schema": "steel-remote-worldgen-e2e-v2",
+  "timestamp_utc": "2026-08-10T02:15:05Z",
+  "environment": {
+    "host": "kdco-node-nuc",
+    "os": "Linux 7.0.0-28-generic x86_64",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-1260P",
+    "logical_cpus": 16,
+    "memory_gib": 61,
+    "transport": "loopback plaintext"
+  },
+  "pins": {
+    "steel_base_commit": "ddfaf4650",
+    "steel_version": "0.15.2+mc26.2",
+    "minecraft_version": "26.2",
+    "protocol": 776,
+    "folia_commit": "57f643f10e0a9d01024773232d38ae666067d593",
+    "paper_commit": "1f7285664c3a11690a641e19ffcc90321fcc7fde",
+    "azalea_commit": "6249c295d353b9b3ef68f665b311cba39211fd19"
+  },
+  "profile_sha256": "2fd09b3262ac0d93279500a88ad7209340f1bec322ac5888f7d7c8fdba4570de",
+  "worker": {
+    "generation_threads": 1,
+    "max_in_flight": 64,
+    "requests_before_client": 26,
+    "requests_after_client": 1283,
+    "successful_requests_during_client": 1256,
+    "failed": 0,
+    "cancelled": 0,
+    "cache_hits": 1
+  },
+  "folia": {
+    "plugin": "0.1.0+mc26.2",
+    "prototype_allow_unapplied_postprocessing": true,
+    "clean_shutdown_without_grpc_classloader_errors": true,
+    "cache_max_chunks": 4096,
+    "cache_max_encoded_bytes": 268435456
+  },
+  "client": {
+    "elapsed_micros": 55124581,
+    "error": null,
+    "keepalives": 49,
+    "ok": true,
+    "phase_centers": [
+      null,
+      [
+        0,
+        0
+      ],
+      [
+        512,
+        0
+      ],
+      [
+        512,
+        512
+      ],
+      [
+        0,
+        512
+      ]
+    ],
+    "protocol": 776,
+    "received_chunk_events": 557,
+    "spawned_micros": 5113197,
+    "ticks": 1000,
+    "unique_chunks_by_phase": [
+      117,
+      117,
+      117,
+      117,
+      89
+    ],
+    "view_distance": 4,
+    "waypoints": [
+      [
+        0,
+        0
+      ],
+      [
+        512,
+        0
+      ],
+      [
+        512,
+        512
+      ],
+      [
+        0,
+        512
+      ]
+    ]
+  },
+  "interpretation": "Functional loopback evidence only. Phase counts are waypoint-proximity filtered and the worker RPC delta is measured across client exploration. The Bukkit prototype deliberately cannot import aquifer post-processing and is not a faithful production scheduler integration."
+}

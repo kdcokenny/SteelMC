@@ -243,6 +243,8 @@ pub struct ChunkMap {
     pub world_gen_context: Arc<WorldGenContext>,
     /// The thread pool to use for chunk generation (throughput-oriented).
     pub generation_pool: Arc<ThreadPool>,
+    /// Optional upper stage bound used by detached headless generation worlds.
+    generation_status_ceiling: Option<ChunkStatus>,
     /// The thread pool to use for CPU-heavy chunk persistence work.
     chunk_encoding_pool: Arc<ThreadPool>,
     /// The thread pool to use for chunk ticking (latency-oriented).
@@ -339,6 +341,7 @@ impl ChunkMap {
             generation_pool,
             chunk_encoding_pool,
             TimedChunkTickets::default(),
+            None,
         )
     }
 
@@ -357,6 +360,7 @@ impl ChunkMap {
         generation_pool: Arc<ThreadPool>,
         chunk_encoding_pool: Arc<ThreadPool>,
         timed_chunk_tickets: TimedChunkTickets,
+        generation_status_ceiling: Option<ChunkStatus>,
     ) -> Self {
         let mut chunk_tickets = ChunkTicketManager::new();
         timed_chunk_tickets.activate_all(&mut chunk_tickets);
@@ -382,6 +386,7 @@ impl ChunkMap {
                 sea_level,
             )),
             generation_pool,
+            generation_status_ceiling,
             chunk_encoding_pool,
             chunk_runtime,
             storage,
@@ -1138,7 +1143,10 @@ impl ChunkMap {
                     let Some(status) = generation_status(Some(*level)) else {
                         return false;
                     };
-                    holder.schedule_chunk_generation_task_b(status, self)
+                    holder.schedule_chunk_generation_task_b(
+                        holder.cap_generation_status(status),
+                        self,
+                    )
                 })
                 .count();
             timings.schedule_generation = start.elapsed();

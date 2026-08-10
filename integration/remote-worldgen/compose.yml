@@ -1,0 +1,48 @@
+services:
+  worldgen-worker:
+    build:
+      context: ../..
+      dockerfile: steel-worldgen-service/Dockerfile
+      args:
+        STEEL_WORLDGEN_BUILD_ID: ${STEEL_WORLDGEN_BUILD_ID:?set an immutable source or image digest}
+        STEEL_WORLDGEN_SOURCE_URL: ${STEEL_WORLDGEN_SOURCE_URL:?set the exact public corresponding-source URL}
+    environment:
+      RUST_LOG: steel_worldgen_service=info,steel_core=warn
+      STEEL_WORLDGEN_BIND: 0.0.0.0:50051
+      # This network is Docker-internal; do not publish the worker port.
+      STEEL_WORLDGEN_ALLOW_INSECURE_REMOTE: "true"
+      STEEL_WORLDGEN_PROFILE_ID: benchmark-overworld-26.2
+      STEEL_WORLDGEN_SOURCE_URL: ${STEEL_WORLDGEN_SOURCE_URL:?set the exact public corresponding-source URL}
+      STEEL_WORLDGEN_DIMENSION: minecraft:overworld
+      STEEL_WORLDGEN_GENERATOR: minecraft:overworld
+      STEEL_WORLDGEN_SEED: ${STEEL_WORLDGEN_SEED:?set the exact Folia world seed}
+      STEEL_WORLDGEN_THREADS: ${STEEL_WORLDGEN_THREADS:-1}
+      STEEL_WORLDGEN_MAX_IN_FLIGHT: ${STEEL_WORLDGEN_MAX_IN_FLIGHT:-16}
+      STEEL_WORLDGEN_MAX_IN_FLIGHT_PER_PEER: ${STEEL_WORLDGEN_MAX_IN_FLIGHT_PER_PEER:-4}
+      STEEL_WORLDGEN_MAX_CACHE_ENTRIES: ${STEEL_WORLDGEN_MAX_CACHE_ENTRIES:-2048}
+      STEEL_WORLDGEN_MAX_CACHE_BYTES: ${STEEL_WORLDGEN_MAX_CACHE_BYTES:-536870912}
+      STEEL_WORLDGEN_REQUEST_TIMEOUT_MS: ${STEEL_WORLDGEN_REQUEST_TIMEOUT_MS:-30000}
+      STEEL_WORLDGEN_ENDPOINT: http://127.0.0.1:50051
+      STEEL_WORLDGEN_HEALTH_ONLY: "true"
+    expose:
+      - "50051"
+    healthcheck:
+      test: ["CMD", "/steel-worldgen-probe"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    networks:
+      - worker
+
+networks:
+  worker:
+    internal: true

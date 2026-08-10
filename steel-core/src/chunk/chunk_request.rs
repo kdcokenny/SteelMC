@@ -1,9 +1,13 @@
 //! Ticket-owned chunk availability requests.
 
-use std::sync::Arc;
+use std::{
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use rustc_hash::FxHashSet;
 use steel_utils::ChunkPos;
+use tokio::time::sleep;
 
 use crate::chunk::{
     chunk_holder::ChunkHolder,
@@ -66,6 +70,12 @@ pub struct ReadyChunks {
     pub holders: Vec<Arc<ChunkHolder>>,
 }
 
+// Per-holder baseline distinguishes a new failure from a retry of an old failed attempt.
+struct GenerationFailureBaseline {
+    holder: Weak<ChunkHolder>,
+    revision: u64,
+}
+
 struct ChunkRequestInner {
     chunk_map: Arc<ChunkMap>,
     positions: Box<[ChunkPos]>,
@@ -73,6 +83,7 @@ struct ChunkRequestInner {
     ticket_kind: ChunkTicketKind,
     ticket: ChunkTicket,
     submission_revision: Option<ChunkTicketRevision>,
+    generation_failure_baselines: Box<[GenerationFailureBaseline]>,
 }
 
 /// Handle for a ticketed chunk request.
@@ -96,6 +107,21 @@ impl ChunkRequestHandle {
         ticket: ChunkTicket,
     ) -> Self {
         let positions = dedupe_positions(request.positions);
+        let generation_failure_baselines = positions
+            .iter()
+            .map(|pos| {
+                chunk_map
+                    .chunks
+                    .read_sync(pos, |_, holder| GenerationFailureBaseline {
+                        holder: Arc::downgrade(holder),
+                        revision: holder.generation_failure_revision(),
+                    })
+                    .unwrap_or_else(|| GenerationFailureBaseline {
+                        holder: Weak::new(),
+                        revision: 0,
+                    })
+            })
+            .collect();
         let submission_revision = chunk_map.add_chunk_tickets(&positions, ticket);
 
         Self {
@@ -106,6 +132,7 @@ impl ChunkRequestHandle {
                 ticket_kind: request.ticket_kind,
                 ticket,
                 submission_revision,
+                generation_failure_baselines,
             }),
         }
     }
@@ -198,6 +225,46 @@ impl ChunkRequestHandle {
         })
     }
 
+    /// Drives offline chunk scheduling until every requested chunk is ready.
+    ///
+    /// This is intended for headless generation tools that do not have a gameplay
+    /// tick boundary. Live servers must continue to publish scheduler epochs from
+    /// their normal lifecycle boundary instead. Cancelling this future leaves the
+    /// handle active; dropping or explicitly cancelling the handle releases its tickets.
+    pub async fn wait_ready_offline(&self) -> Option<ReadyChunks> {
+        loop {
+            let inner = self.inner.as_ref()?;
+            let generation_failed = inner.positions.iter().enumerate().any(|(index, pos)| {
+                inner
+                    .chunk_map
+                    .chunks
+                    .read_sync(pos, |_, holder| {
+                        let baseline = &inner.generation_failure_baselines[index];
+                        let same_holder = baseline
+                            .holder
+                            .upgrade()
+                            .is_some_and(|original| Arc::ptr_eq(&original, holder));
+                        let revision = holder.generation_failure_revision();
+                        if same_holder {
+                            baseline.revision != 0 || revision != baseline.revision
+                        } else {
+                            revision != 0
+                        }
+                    })
+                    .unwrap_or(false)
+            });
+            if generation_failed {
+                return None;
+            }
+            if let Some(chunks) = self.ready_chunks() {
+                return Some(chunks);
+            }
+
+            inner.chunk_map.advance_scheduling();
+            sleep(Duration::from_millis(1)).await;
+        }
+    }
+
     /// Cancels the request and releases its tickets.
     pub fn cancel(&mut self) {
         self.release_tickets();
@@ -288,7 +355,8 @@ fn dedupe_positions(positions: Vec<ChunkPos>) -> Box<[ChunkPos]> {
 mod tests {
     use super::*;
     use crate::test_support::fresh_test_world;
-    use std::{thread, time::Duration};
+    use std::{sync::mpsc::sync_channel, thread, time::Duration};
+    use tokio::{runtime::Builder, time::timeout};
 
     fn drive_request_until_ready(chunk_map: &Arc<ChunkMap>, request: &ChunkRequestHandle) {
         for _ in 0..10_000 {
@@ -309,6 +377,114 @@ mod tests {
             ChunkPos::new(1, 2),
         ]);
         assert_eq!(&*positions, &[ChunkPos::new(1, 2), ChunkPos::new(3, 4)]);
+    }
+
+    #[test]
+    fn wait_ready_offline_succeeds_and_cancelled_handle_returns_none() {
+        let world = fresh_test_world("chunk_request_wait_offline");
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("offline wait runtime should start");
+        let pos = ChunkPos::new(20, -20);
+        let request =
+            world
+                .chunk_map
+                .request_chunk(pos, ChunkStatus::Empty, ChunkTicketKind::Pregen);
+        let ready = runtime
+            .block_on(async {
+                timeout(Duration::from_secs(10), request.wait_ready_offline()).await
+            })
+            .expect("offline wait timed out")
+            .expect("empty generator request unexpectedly failed");
+        assert_eq!(ready.status, ChunkStatus::Empty);
+        assert_eq!(ready.holders.len(), 1);
+        ready.holders[0].record_generation_failure_for_test();
+        let quarantined =
+            world
+                .chunk_map
+                .request_chunk(pos, ChunkStatus::Empty, ChunkTicketKind::Pregen);
+        assert!(
+            runtime.block_on(quarantined.wait_ready_offline()).is_none(),
+            "ready data from a failed holder must not bypass quarantine"
+        );
+
+        let mut cancelled = world.chunk_map.request_chunk(
+            ChunkPos::new(21, -20),
+            ChunkStatus::Empty,
+            ChunkTicketKind::Pregen,
+        );
+        cancelled.cancel();
+        assert!(runtime.block_on(cancelled.wait_ready_offline()).is_none());
+        drop((quarantined, request, cancelled));
+        world.chunk_map.stop_generation_refill_loop();
+        world.chunk_map.task_tracker.close();
+        runtime.block_on(world.chunk_map.task_tracker.wait());
+    }
+
+    #[test]
+    fn wait_ready_offline_quarantines_failed_holder() {
+        let world = fresh_test_world("chunk_request_wait_retry");
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("offline retry runtime should start");
+        let (started_sender, started_receiver) = sync_channel(0);
+        let (release_sender, release_receiver) = sync_channel(0);
+        world.chunk_map.generation_pool.spawn(move || {
+            started_sender
+                .send(())
+                .expect("test should still await the occupied generation pool");
+            let _ = release_receiver.recv();
+        });
+        started_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("failed to occupy the generation pool");
+
+        let pos = ChunkPos::new(22, -20);
+        let failed =
+            world
+                .chunk_map
+                .request_chunk(pos, ChunkStatus::Noise, ChunkTicketKind::Pregen);
+        let mut holder = None;
+        for _ in 0..100 {
+            world.chunk_map.advance_scheduling();
+            holder = world
+                .chunk_map
+                .chunks
+                .read_sync(&pos, |_, holder| Arc::clone(holder));
+            if holder.is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        let holder = holder.expect("ticket scheduling should create the requested holder");
+        holder.cancel_generation_task();
+        holder.record_generation_failure_for_test();
+        assert!(runtime.block_on(failed.wait_ready_offline()).is_none());
+        drop(failed);
+        release_sender
+            .send(())
+            .expect("occupied generation task should still be waiting");
+
+        let retry = world
+            .chunk_map
+            .request_chunk(pos, ChunkStatus::Noise, ChunkTicketKind::Pregen);
+        assert!(
+            runtime.block_on(retry.wait_ready_offline()).is_none(),
+            "a partially mutated failed holder must remain quarantined"
+        );
+        assert!(
+            world
+                .chunk_map
+                .chunks
+                .read_sync(&pos, |_, current| Arc::ptr_eq(current, &holder))
+                .unwrap_or(false)
+        );
+        drop(retry);
+        world.chunk_map.stop_generation_refill_loop();
+        world.chunk_map.task_tracker.close();
+        runtime.block_on(world.chunk_map.task_tracker.wait());
     }
 
     #[test]

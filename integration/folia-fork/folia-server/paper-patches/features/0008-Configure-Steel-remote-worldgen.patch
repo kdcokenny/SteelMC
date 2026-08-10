@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SteelMC contributors <noreply@steelmc.dev>
+Date: Mon, 10 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Configure Steel remote worldgen
+
+The importer is startup-only; /paper reload does not replace its pinned
+transport, capabilities, or registry profile.
+
+diff --git a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
+index c52d41fd0..49cf2550c 100644
+--- a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
++++ b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
+@@ -36,6 +36,31 @@ public class GlobalConfiguration extends ConfigurationPart {
+         return instance;
+     }
+ 
++    // SteelMC start - startup-only remote NOISE importer
++    public SteelRemoteWorldgen steelRemoteWorldgen;
++
++    public class SteelRemoteWorldgen extends ConfigurationPart {
++        public boolean enabled = false;
++        public String targetWorld = "world";
++        public String expectedNoiseSettings = "minecraft:overworld";
++        public String endpoint = "https://steel-worldgen.internal:50051";
++        public long deadlineMillis = 120_000;
++        public int maxInFlight = 1;
++        public int maxQueued = 4096;
++        public String expectedMinecraftVersion = "26.2";
++        public String expectedProfileSha256 = "";
++        public boolean plaintext = false;
++        public Tls tls;
++
++        public class Tls extends ConfigurationPart {
++            public String caCertificate = "/run/secrets/server-ca.crt";
++            public String clientCertificate = "/run/secrets/folia-client.crt";
++            public String clientKey = "/run/secrets/folia-client.key";
++            public String domain = "steel-worldgen-26-2-v1";
++        }
++    }
++    // SteelMC end - startup-only remote NOISE importer
++
+     public ChunkLoadingBasic chunkLoadingBasic;
+ 
+     public class ChunkLoadingBasic extends ConfigurationPart {

@@ -1,6 +1,7 @@
 cargo-features = ["codegen-backend"]
 [workspace]
 resolver = "2"
+exclude = ["integration/client-bot"]
 members = [
     "steel",
     "steel-login",
@@ -12,6 +13,7 @@ members = [
     "steel-core",
     "steel-crypto",
     "steel-math",
+    "steel-worldgen-service",
 ]
 
 [workspace.package]
@@ -100,6 +102,11 @@ opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
 tracing-opentelemetry = "0.33.0"
 
 # Networking
+rustls = { version = "0.23.42", default-features = false, features = ["ring", "std"] }
+tonic = { version = "0.14.6", features = ["transport", "gzip", "tls-ring"] }
+tonic-prost = "0.14.6"
+tonic-health = "0.14.6"
+prost = "0.14.4"
 reqwest = { version = "0.13.4", features = [
     "json",
     "rustls",

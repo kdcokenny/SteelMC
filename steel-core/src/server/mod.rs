@@ -655,6 +655,7 @@ impl Server {
                     sea_level: generator_output.sea_level,
                     default_gamemode: world_entry.default_gamemode,
                     difficulty: world_entry.difficulty,
+                    generation_status_ceiling: None,
                 },
                 generation_pool.clone(),
                 Arc::clone(&chunk_encoding_pool),

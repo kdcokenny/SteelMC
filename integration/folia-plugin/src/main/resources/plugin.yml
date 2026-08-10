@@ -1,0 +1,8 @@
+name: SteelRemoteWorldGen
+version: '${version}'
+main: dev.steelmc.worldgen.SteelRemoteWorldGenPlugin
+api-version: '26.2'
+folia-supported: true
+load: STARTUP
+description: Prototype Steel remote NOISE generator bridge for Folia 26.2
+authors: [SteelMC]

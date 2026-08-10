@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SteelMC contributors <noreply@steelmc.dev>
+Date: Mon, 10 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Use Steel remote NOISE
+
+Selected fresh BIOMES chunks complete NOISE only after an asynchronous V1
+artifact has been fully validated, prepared off-chunk, and atomically
+committed. Unsupported selected-world contexts fail closed.
+
+diff --git a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
+--- a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
++++ b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
+@@ -87,21 +87,29 @@
+     ) {
+         ServerLevel level = context.level();
+         WorldGenRegion region = new WorldGenRegion(level, chunks, step, chunk);
+-        return context.generator()
+-            .fillFromNoise(Blender.of(region), level.getChunkSource().randomState(), level.structureManager().forWorldGenRegion(region), chunk)
+-            .thenApply(generatedChunk -> {
+-                if (generatedChunk instanceof ProtoChunk protoChunk) {
+-                    BelowZeroRetrogen belowZeroRetrogen = protoChunk.getBelowZeroRetrogen();
+-                    if (belowZeroRetrogen != null) {
+-                        BelowZeroRetrogen.replaceOldBedrock(protoChunk);
+-                        if (belowZeroRetrogen.hasBedrockHoles()) {
+-                            belowZeroRetrogen.applyBedrockMask(protoChunk);
+-                        }
++        Blender blender = Blender.of(region);
++        CompletableFuture<ChunkAccess> generated;
++        if (io.papermc.paper.worldgen.steel.SteelRemoteNoise.handles(level)) {
++            generated = io.papermc.paper.worldgen.steel.SteelRemoteNoise.generateNoise(
++                level, context.generator(), blender, region.getCenter(), chunk
++            );
++        } else {
++            generated = context.generator()
++                .fillFromNoise(blender, level.getChunkSource().randomState(), level.structureManager().forWorldGenRegion(region), chunk);
++        }
++        return generated.thenApply(generatedChunk -> {
++            if (generatedChunk instanceof ProtoChunk protoChunk) {
++                BelowZeroRetrogen belowZeroRetrogen = protoChunk.getBelowZeroRetrogen();
++                if (belowZeroRetrogen != null) {
++                    BelowZeroRetrogen.replaceOldBedrock(protoChunk);
++                    if (belowZeroRetrogen.hasBedrockHoles()) {
++                        belowZeroRetrogen.applyBedrockMask(protoChunk);
+                     }
+                 }
+-
+-                return (ChunkAccess)generatedChunk;
+-            });
++            }
++
++            return generatedChunk;
++        });
+     }
+ 
+     public static CompletableFuture<ChunkAccess> generateSurface(
+diff --git a/net/minecraft/server/dedicated/DedicatedServer.java b/net/minecraft/server/dedicated/DedicatedServer.java
+--- a/net/minecraft/server/dedicated/DedicatedServer.java
++++ b/net/minecraft/server/dedicated/DedicatedServer.java
+@@ -237,6 +237,7 @@
+         // Paper start - initialize global and world-defaults configuration
+         this.paperConfigurations.initializeGlobalConfiguration(this.registryAccess());
+         this.paperConfigurations.initializeWorldDefaultsConfiguration(this.registryAccess());
++        io.papermc.paper.worldgen.steel.SteelRemoteNoise.start(this); // SteelMC - remote NOISE
+         // Paper end - initialize global and world-defaults configuration
+         this.server.spark.enableEarlyIfRequested(); // Paper - spark
+         // Paper start - fix converting txt to json file; convert old users earlier after PlayerList creation but before file load/save
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1142,6 +1142,7 @@
+     }
+     public void stopPart2() {
+         // Folia end - region threading
++        io.papermc.paper.worldgen.steel.SteelRemoteNoise.closeInstance(); // SteelMC - remote NOISE
+         this.savedDataStorage.close();
+         this.resources.close();
+ 
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java
+@@ -182,6 +182,9 @@
+     @Override
+     public void cancel() {
+         this.cancelled = true;
++        if (this.toStatus == ChunkStatus.NOISE && io.papermc.paper.worldgen.steel.SteelRemoteNoise.handles(this.world)) {
++            io.papermc.paper.worldgen.steel.SteelRemoteNoise.cancel(this.world, this.chunkX, this.chunkZ);
++        }
+         if (this.generateTask.cancel()) {
+             this.complete(null, null);
+         }

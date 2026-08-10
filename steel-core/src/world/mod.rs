@@ -225,6 +225,9 @@ pub struct WorldConfig {
     pub default_gamemode: GameType,
     /// Difficulty used when creating new level data.
     pub difficulty: Difficulty,
+    /// Optional upper bound for generation stages in detached headless worlds.
+    /// Live worlds must leave this as `None`.
+    pub generation_status_ceiling: Option<ChunkStatus>,
 }
 
 /// A struct that represents a world.
@@ -349,6 +352,7 @@ impl World {
         let is_flat = config.is_flat;
         let sea_level = config.sea_level;
         let default_gamemode = config.default_gamemode;
+        let generation_status_ceiling = config.generation_status_ceiling;
         // Create storage backend based on config
         let storage: Arc<ChunkStorage> = match &config.storage {
             WorldStorageConfig::Disk { path } => {
@@ -404,6 +408,7 @@ impl World {
                 generation_pool,
                 chunk_encoding_pool,
                 timed_chunk_tickets,
+                generation_status_ceiling,
             ));
             chunk_map.start_generation_refill_loop();
 

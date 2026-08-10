@@ -1,5 +1,10 @@
 [files]
-extend-exclude = ["**/build_assets/**", "*.json"]
+extend-exclude = [
+    "**/build_assets/**",
+    "*.json",
+    "integration/**/build/**",
+    "integration/**/target/**",
+]
 
 [type.locale]
 extend-glob = ["**/locale.rs"]
@@ -13,6 +18,7 @@ BlockBehaviour = "BlockBehaviour"
 behaviour = "behaviour"
 interruptable = "interruptable"
 neighbour = "neighbour"
+neighbours = "neighbours"
 # Vanilla stronghold piece-type IDs (shs, shsd, shrc, ...).
 shs = "shs"
 # Vanilla carver tag name (minecraft:overworld_carver_replaceables).

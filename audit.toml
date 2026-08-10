@@ -4,3 +4,24 @@ ignore = [
     # Tracked at https://rustsec.org/advisories/RUSTSEC-2023-0071
     "RUSTSEC-2023-0071",
 ]
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "0BSD",
+    "AGPL-3.0-or-later",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "GPL-3.0-or-later",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "Zlib",
+]

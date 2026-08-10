@@ -15,6 +15,105 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --verbose
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - run: cargo test --locked --verbose
+
+
+  remote-worldgen-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Verify Gradle wrapper
+        working-directory: integration/folia-plugin/gradle/wrapper
+        run: sha256sum --check gradle-wrapper.jar.sha256
+      - name: Test protocol-776 client bot
+        working-directory: integration/client-bot
+        run: cargo test --locked --verbose
+      - name: Test and package Folia projection plugin
+        working-directory: integration/folia-plugin
+        run: ./gradlew --no-daemon --dependency-verification strict test shadowJar
+      - name: Test current Rust artifact through Java decode and apply
+        env:
+          STEEL_WORLDGEN_BUILD_ID: ci-${{ github.sha }}
+          STEEL_WORLDGEN_SOURCE_URL: https://github.com/${{ github.repository }}/tree/${{ github.sha }}
+        run: timeout 600s integration/remote-worldgen/run-cross-language-test.sh
+      - name: Test worker mutual TLS
+        env:
+          STEEL_WORLDGEN_BUILD_ID: ci-${{ github.sha }}
+          STEEL_WORLDGEN_SOURCE_URL: https://github.com/${{ github.repository }}/tree/${{ github.sha }}
+          STEEL_MTLS_OUTPUT: /tmp/steel-mtls-ci
+        run: timeout 600s integration/remote-worldgen/run-mtls-smoke.sh
+      - name: Validate integration manifests and scripts
+        shell: bash
+        run: |
+          bash -n integration/remote-worldgen/run-e2e.sh
+          bash -n integration/remote-worldgen/run-mtls-smoke.sh
+          bash -n integration/remote-worldgen/run-cross-language-test.sh
+          bash -n integration/remote-worldgen/regenerate-golden.sh
+          STEEL_WORLDGEN_BUILD_ID=ci-${GITHUB_SHA} \
+          STEEL_WORLDGEN_SEED=13579 \
+          STEEL_WORLDGEN_SOURCE_URL=https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA} \
+            docker compose -f integration/remote-worldgen/compose.yml config >/dev/null
+          ruby -e 'require "yaml"; YAML.load_stream(File.read("integration/remote-worldgen/kubernetes.yaml"))'
+      - name: Build and probe worker image
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_url="https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}"
+          docker build --check --build-arg STEEL_WORLDGEN_BUILD_ID=ci-${GITHUB_SHA} \
+            --build-arg STEEL_WORLDGEN_SOURCE_URL="$source_url" \
+            -f steel-worldgen-service/Dockerfile .
+          timeout 1800s docker build --tag steel-worldgen-ci \
+            --build-arg STEEL_WORLDGEN_BUILD_ID=ci-${GITHUB_SHA} \
+            --build-arg STEEL_WORLDGEN_SOURCE_URL="$source_url" \
+            -f steel-worldgen-service/Dockerfile .
+          container=$(docker run --detach --rm --env STEEL_WORLDGEN_SEED=13579 --env STEEL_WORLDGEN_HEALTH_ONLY=true steel-worldgen-ci)
+          trap 'docker rm --force "$container" >/dev/null 2>&1 || true' EXIT
+          ready=false
+          for _ in $(seq 1 120); do
+            if docker exec "$container" /steel-worldgen-probe >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            docker logs "$container"
+            exit 1
+          fi
+          docker cp "$container":/steelmc-corresponding-source.tar /tmp/steelmc-source.tar
+          docker cp "$container":/steelmc-cargo-metadata.json /tmp/steelmc-cargo-metadata.json
+          docker cp "$container":/steelmc-third-party-licenses.tar /tmp/steelmc-third-party.tar
+          tar -tf /tmp/steelmc-source.tar > /tmp/steelmc-source-files
+          grep -Fxq './steel-worldgen-service/src/server.rs' /tmp/steelmc-source-files
+          tar -tf /tmp/steelmc-third-party.tar > /tmp/steelmc-license-files
+          grep -Eiq '(^|/)(license|copying|notice)' /tmp/steelmc-license-files
+          python3 -c 'import json; p=json.load(open("/tmp/steelmc-cargo-metadata.json")); assert any(x["name"] == "steel-worldgen-service" for x in p["packages"])'
+
+
+  folia-async-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Apply and compile pinned Folia Steel importer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp steel-worldgen-service/proto/steel/worldgen/v1/worldgen.proto \
+            integration/folia-fork/folia-server/src/main/proto/steel/worldgen/v1/worldgen.proto
+          git clone --filter=blob:none https://github.com/PaperMC/Folia.git /tmp/folia-26.2
+          git -C /tmp/folia-26.2 checkout 57f643f10e0a9d01024773232d38ae666067d593
+          cp -a integration/folia-fork/folia-server/. /tmp/folia-26.2/folia-server/
+          cd /tmp/folia-26.2
+          timeout 900s ./gradlew --no-daemon applyAllPatches
+          timeout 900s ./gradlew --no-daemon :folia-server:compileJava

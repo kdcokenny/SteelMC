@@ -1,9 +1,14 @@
 .github
 .git
 /target
+/artifacts
+/integration/client-bot/target
+/integration/folia-plugin/.gradle
+/integration/folia-plugin/build
 /steel-registry/src/generated
 /steel-utils/src/generated
 /steel-core/src/behavior/generated
+/steel-core/src/entity/generated
 /steel-worldgen/src/generated
 /steel-utils/build_assets/builtin_datapacks
 /steel-utils/build_assets/.asset-extract.lock

@@ -147,6 +147,7 @@ impl ChunkMap {
                 }
             };
 
+        chunk_holder.set_generation_status_ceiling(self.generation_status_ceiling);
         if let Some(level) = new_level {
             let old = chunk_holder.swap_load_level(level);
             chunk_holder.set_simulation_level(new_simulation_level);

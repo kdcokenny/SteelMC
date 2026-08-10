@@ -13,6 +13,10 @@
 /config
 /.tmp
 /.logs
+/artifacts
+/integration/client-bot/target
+/integration/folia-plugin/.gradle
+/integration/folia-plugin/build
 /world
 /saves
 /players

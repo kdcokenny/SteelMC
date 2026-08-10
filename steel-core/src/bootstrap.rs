@@ -15,9 +15,11 @@ fn fill_behavior_registries() {
     log::info!("Behavior registries initialized");
 }
 
+/// Initializes Steel's process-global vanilla and behavior registries.
+///
 /// # Errors
 /// Returns an error if the global registry has already been initialized.
-pub(crate) fn init_globals() -> Result<(), String> {
+pub fn init_globals() -> Result<(), String> {
     let start = Instant::now();
     let published = init_vanilla_registry();
     log::info!("Vanilla registry loaded in {:?}", start.elapsed());

@@ -1,0 +1,121 @@
+# Treat every `v1` name/label below as immutable. Deploy a new versioned stack
+# and coordinate Folia clients instead of changing image, seed, or profile in place.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: steel-worldgen-profile-v1
+immutable: true
+stringData:
+  seed: REPLACE_WITH_SIGNED_64_BIT_SEED
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: steel-worldgen-26-2-v1
+  labels: {app: steel-worldgen, profile: overworld-26-2, profile-version: overworld-26-2-v1}
+spec:
+  replicas: 4
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: steel-worldgen, profile: overworld-26-2, profile-version: overworld-26-2-v1}
+  template:
+    metadata:
+      labels: {app: steel-worldgen, profile: overworld-26-2, profile-version: overworld-26-2-v1}
+    spec:
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: steel-worldgen, profile: overworld-26-2, profile-version: overworld-26-2-v1}
+      containers:
+        - name: worker
+          # Replace with the digest produced from the pinned Dockerfile.
+          image: registry.example/steel-worldgen@sha256:REPLACE_WITH_IMMUTABLE_DIGEST
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: grpc, containerPort: 50051}
+          env:
+            - {name: STEEL_WORLDGEN_BIND, value: "0.0.0.0:50051"}
+            - {name: STEEL_WORLDGEN_PROFILE_ID, value: "prod-overworld-26.2"}
+            - {name: STEEL_WORLDGEN_SOURCE_URL, value: "https://github.com/Steel-Foundation/SteelMC/tree/REPLACE_EXACT_COMMIT"}
+            - {name: STEEL_WORLDGEN_GENERATOR, value: "minecraft:overworld"}
+            - {name: STEEL_WORLDGEN_DIMENSION, value: "minecraft:overworld"}
+            - name: STEEL_WORLDGEN_SEED
+              valueFrom: {secretKeyRef: {name: steel-worldgen-profile-v1, key: seed}}
+            - {name: STEEL_WORLDGEN_THREADS, value: "1"}
+            - {name: STEEL_WORLDGEN_MAX_IN_FLIGHT, value: "32"}
+            - {name: STEEL_WORLDGEN_MAX_IN_FLIGHT_PER_PEER, value: "8"}
+            - {name: STEEL_WORLDGEN_MAX_CACHE_ENTRIES, value: "8192"}
+            - {name: STEEL_WORLDGEN_MAX_CACHE_BYTES, value: "2147483648"}
+            - {name: STEEL_WORLDGEN_REQUEST_TIMEOUT_MS, value: "120000"}
+            - {name: STEEL_WORLDGEN_TLS_CERT, value: "/tls/server.crt"}
+            - {name: STEEL_WORLDGEN_TLS_KEY, value: "/tls/server.key"}
+            - {name: STEEL_WORLDGEN_TLS_CLIENT_CA, value: "/tls/client-ca.crt"}
+            - {name: STEEL_WORLDGEN_ENDPOINT, value: "https://127.0.0.1:50051"}
+            - {name: STEEL_WORLDGEN_HEALTH_ONLY, value: "true"}
+            - {name: STEEL_WORLDGEN_CLIENT_CA, value: "/tls/server-ca.crt"}
+            - {name: STEEL_WORLDGEN_CLIENT_CERT, value: "/tls/probe-client.crt"}
+            - {name: STEEL_WORLDGEN_CLIENT_KEY, value: "/tls/probe-client.key"}
+            - {name: STEEL_WORLDGEN_CLIENT_DOMAIN, value: "steel-worldgen-26-2-v1"}
+          resources:
+            requests: {cpu: "1", memory: 8Gi}
+            limits: {cpu: "2", memory: 12Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tls, mountPath: /tls, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+          readinessProbe:
+            exec: {command: ["/steel-worldgen-probe"]}
+            timeoutSeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec: {command: ["/steel-worldgen-probe"]}
+            timeoutSeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          startupProbe:
+            exec: {command: ["/steel-worldgen-probe"]}
+            timeoutSeconds: 5
+            periodSeconds: 2
+            failureThreshold: 60
+      volumes:
+        - name: tls
+          secret: {secretName: steel-worldgen-mtls}
+        - name: tmp
+          emptyDir: {medium: Memory, sizeLimit: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: steel-worldgen-26-2-v1
+spec:
+  selector: {app: steel-worldgen, profile: overworld-26-2, profile-version: overworld-26-2-v1}
+  ports:
+    - {name: grpc, port: 50051, targetPort: grpc}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: steel-worldgen-ingress-v1
+spec:
+  podSelector:
+    matchLabels: {app: steel-worldgen, profile: overworld-26-2, profile-version: overworld-26-2-v1}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {steelmc-role: folia}
+      ports:
+        - {protocol: TCP, port: 50051}
+  egress: []

@@ -154,6 +154,7 @@ pub struct ChunkHolder {
     status_changed: Notify,
     generation_task: SyncMutex<Option<Arc<ChunkGenerationTask>>>,
     generation_task_target: AtomicU8,
+    generation_failure_revision: AtomicU64,
     pos: ChunkPos,
     /// The current loading ticket level of the chunk.
     load_level: AtomicU8,
@@ -167,6 +168,8 @@ pub struct ChunkHolder {
     save_lifecycle: AtomicU8,
     /// The highest status that generation is allowed to reach.
     highest_allowed_status: AtomicU8,
+    /// An optional fixed upper bound for detached headless generation.
+    generation_status_ceiling: AtomicU8,
     /// The minimum Y coordinate of the world.
     min_y: i32,
     /// The total height of the world.
@@ -295,6 +298,7 @@ impl ChunkHolder {
             status_changed: Notify::new(),
             generation_task: SyncMutex::new(None),
             generation_task_target: AtomicU8::new(STATUS_NONE),
+            generation_failure_revision: AtomicU64::new(0),
             pos,
             load_level: AtomicU8::new(load_level.raw()),
             simulation_level: AtomicU8::new(optional_ticket_level_raw(simulation_level)),
@@ -302,6 +306,7 @@ impl ChunkHolder {
             active_save_dependencies: AtomicUsize::new(0),
             save_lifecycle: AtomicU8::new(SAVE_LIFECYCLE_ACTIVE),
             highest_allowed_status: AtomicU8::new(highest_allowed_status),
+            generation_status_ceiling: AtomicU8::new(STATUS_NONE),
             min_y,
             height,
             has_changed_sections: AtomicBool::new(false),
@@ -359,10 +364,22 @@ impl ChunkHolder {
         }
     }
 
+    /// Applies a fixed status ceiling before this holder is published by its chunk map.
+    pub(crate) fn set_generation_status_ceiling(&self, ceiling: Option<ChunkStatus>) {
+        let ceiling = ceiling.map_or(STATUS_NONE, |status| status.get_index() as u8);
+        self.generation_status_ceiling
+            .store(ceiling, Ordering::Release);
+        self.update_highest_allowed_status(self.load_level());
+    }
+
     /// Updates the highest allowed generation status based on the ticket level.
     pub fn update_highest_allowed_status(&self, ticket_level: Option<ChunkTicketLevel>) {
-        let new_status =
+        let mut new_status =
             generation_status(ticket_level).map_or(STATUS_NONE, |s| s.get_index() as u8);
+        let ceiling = self.generation_status_ceiling.load(Ordering::Acquire);
+        if new_status != STATUS_NONE && ceiling != STATUS_NONE && ceiling < new_status {
+            new_status = ceiling;
+        }
         self.highest_allowed_status
             .store(new_status, Ordering::Release);
     }
@@ -532,6 +549,12 @@ impl ChunkHolder {
         self.changed_blocks_per_section.len()
     }
 
+    /// Clamps a ticket-derived target to this holder's headless generation ceiling.
+    pub(crate) fn cap_generation_status(&self, status: ChunkStatus) -> ChunkStatus {
+        let ceiling = self.generation_status_ceiling.load(Ordering::Acquire);
+        ChunkStatus::from_index(usize::from(ceiling)).map_or(status, |ceiling| status.min(ceiling))
+    }
+
     /// Checks if the given status is disallowed.
     pub fn is_status_disallowed(&self, status: ChunkStatus) -> bool {
         let allowed = self.highest_allowed_status.load(Ordering::Acquire);
@@ -595,6 +618,16 @@ impl ChunkHolder {
         }
 
         chunk_map.notify_generation_refill();
+    }
+
+    pub(crate) fn generation_failure_revision(&self) -> u64 {
+        self.generation_failure_revision.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_generation_failure_for_test(&self) {
+        self.generation_failure_revision
+            .fetch_add(1, Ordering::AcqRel);
     }
 
     /// Gets access to the chunk if it has reached the given status.
@@ -1354,13 +1387,21 @@ impl ChunkHolder {
         }
     }
 
-    /// Clears the current generation task if it is still the supplied task.
-    pub(crate) fn clear_generation_task_if_current(&self, task: &Arc<ChunkGenerationTask>) {
+    /// Finishes the current generation task if it is still the supplied task.
+    pub(crate) fn finish_generation_task_if_current(
+        &self,
+        task: &Arc<ChunkGenerationTask>,
+        failed: bool,
+    ) {
         let mut task_guard = self.generation_task.lock();
         if task_guard
             .as_ref()
             .is_some_and(|current_task| Arc::ptr_eq(current_task, task))
         {
+            if failed {
+                self.generation_failure_revision
+                    .fetch_add(1, Ordering::AcqRel);
+            }
             task_guard.take();
             self.generation_task_target
                 .store(STATUS_NONE, Ordering::Release);
@@ -1732,5 +1773,18 @@ mod tests {
 
         assert!(holder.try_revive_from_unloading());
         assert!(holder.try_begin_save_preparation().is_none());
+    }
+    #[test]
+    fn headless_generation_ceiling_survives_ticket_updates() {
+        let holder = test_holder();
+        holder.set_generation_status_ceiling(Some(ChunkStatus::Noise));
+
+        assert!(!holder.is_status_disallowed(ChunkStatus::Noise));
+        assert!(holder.is_status_disallowed(ChunkStatus::Surface));
+
+        holder.update_highest_allowed_status(holder.load_level());
+
+        assert!(!holder.is_status_disallowed(ChunkStatus::Noise));
+        assert!(holder.is_status_disallowed(ChunkStatus::Surface));
     }
 }

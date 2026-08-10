@@ -247,6 +247,15 @@ impl Chunk {
         &self.sections
     }
 
+    /// Copies one materialized heightmap in x-fast, z-major order.
+    #[must_use]
+    pub fn heightmap_raw_data(&self, map_type: HeightmapType) -> Option<Box<[u16; 256]>> {
+        self.heightmaps
+            .read()
+            .get(map_type)
+            .map(|heightmap| Box::new(*heightmap.raw_data()))
+    }
+
     /// Returns whether this chunk has unsaved changes.
     #[must_use]
     pub fn is_dirty(&self) -> bool {

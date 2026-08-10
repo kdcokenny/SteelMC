@@ -177,6 +177,7 @@ fn create_test_world_with_key(key: Identifier, difficulty: Difficulty) -> Arc<Wo
                 sea_level: 63,
                 default_gamemode: GameType::Survival,
                 difficulty,
+                generation_status_ceiling: None,
             },
             Arc::clone(&resources.generation_pool),
         ))

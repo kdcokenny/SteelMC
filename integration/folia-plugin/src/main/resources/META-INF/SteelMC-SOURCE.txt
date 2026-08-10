@@ -1,0 +1,5 @@
+SteelRemoteWorldGen is part of SteelMC and is licensed AGPL-3.0-or-later.
+Exact source revision/build identifier: ${sourceRevision}
+Corresponding source location: ${sourceUrl}
+Distributors of modified binaries must provide the exact corresponding modified source.
+The connected worker independently advertises its exact source SHA-256 and source URL via GetCapabilities.
