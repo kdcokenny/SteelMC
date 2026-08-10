@@ -1,24 +1,24 @@
 {
   "artifact_bytes": 4428,
-  "artifact_sha256": "d7d30b3c6981dd004569aaa046317da59932adb3128585326622d398bdc705b3",
+  "artifact_sha256": "96d13c532a9d1da7d374e2d00c0f2232e394c8670d015a5c31c17d0c720c177a",
   "build": {
     "cargo_id": "cargo 1.99.0-nightly (3efb1f477 2026-07-17) | release: 1.99.0-nightly | commit-hash: 3efb1f477e99b42974b982d939fd100303cdf7db | commit-date: 2026-07-17 | host: x86_64-unknown-linux-gnu | libgit2: 1.9.4 (sys:0.21.0 vendored) | libcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:OpenSSL/3.6.3) | ssl: OpenSSL 3.6.3 9 Jun 2026 | os: Ubuntu 26.4.0 (resolute) [64-bit]",
     "configuration": "profile=release;opt=3;debug=false;debug_assertions=false;overflow_checks=true;ub_checks=true;panic=unwind;relocation=pic;target_features=fxsr,sse,sse2,x87;rustflags=-Clink-arg=-fuse-ld=lld | -Zthreads=0",
-    "external_build_id": "39e0a1f99013a68e8b32fb31cabf4c0abcee0e2d",
+    "external_build_id": "0fa2754cad0be0dc45fecd0e83c6bb1af1bcf6f8",
     "license": "AGPL-3.0-or-later",
     "rustc_id": "rustc 1.99.0-nightly (6f72b5dd5 2026-07-22) | binary: rustc | commit-hash: 6f72b5dd5f82226a2773d40efea7bab941892a73 | commit-date: 2026-07-22 | host: x86_64-unknown-linux-gnu | release: 1.99.0-nightly | LLVM version: 22.1.8",
-    "source_sha256": "9a9b3d053ad09af4a3f0591fc3149afee05b64b16a3ddbb1c08e127d4d291918",
-    "source_url": "https://github.com/Steel-Foundation/SteelMC/tree/39e0a1f99013a68e8b32fb31cabf4c0abcee0e2d",
+    "source_sha256": "ead504db288c6c4f236749be3c5859774a9c02b0ec439c3ef735d83dc8d737f0",
+    "source_url": "https://github.com/Steel-Foundation/SteelMC/tree/0fa2754cad0be0dc45fecd0e83c6bb1af1bcf6f8",
     "target": "x86_64-unknown-linux-gnu"
   },
   "chunk": [
     -6,
     2
   ],
-  "generator_sha256": "fdfac2f97662347f480bd8beb5bef7b0c0a4dbd4ae32f62208d4e964423928b6",
-  "profile_sha256": "c5ea8be98d93eb7a1f7edd88c8ef857b5df3cee40b0df8c976ab21310f412e21",
+  "generator_sha256": "e6957d0069c612ba554d69a84c9f9edad5ddd800cd472098f0f9f21ab029c0ad",
+  "profile_sha256": "a5519bebbbc3982fee2c512a9b053c02ad1eea87b85f08e7286aa4e9091bdcc5",
   "registry_sha256": "2c6bc18babbf7b365e611b7547a6bef7123e42696b8bee29c06300f530698d26",
-  "requested_build_id": "39e0a1f99013a68e8b32fb31cabf4c0abcee0e2d",
+  "requested_build_id": "0fa2754cad0be0dc45fecd0e83c6bb1af1bcf6f8",
   "schema": "steel-worldgen-golden-v1",
   "seed": 13579
 }
