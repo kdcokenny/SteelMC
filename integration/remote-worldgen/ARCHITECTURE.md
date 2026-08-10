@@ -11,6 +11,7 @@ Exact source pins used by the checked-in evidence:
 | Steel base | `ddfaf4650` (`0.15.2+mc26.2`) |
 | Minecraft / protocol | `26.2` / `776` |
 | Folia | `57f643f10e0a9d01024773232d38ae666067d593` |
+| Published Folia build-1 baseline | embedded revision `e48800d`, JAR SHA-256 `6726da42d6a4edc4961a43cdccfd7ebf5fea75e7b1342266532ed143df6736e7` |
 | Paper upstream | `1f7285664c3a11690a641e19ffcc90321fcc7fde` |
 | Azalea | `6249c295d353b9b3ef68f665b311cba39211fd19` |
 | Rust toolchain | `nightly-2026-07-23` |

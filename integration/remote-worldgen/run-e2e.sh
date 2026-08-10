@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Reproducible cold Folia + Steel worker + protocol-776 Azalea exploration test.
-: "${FOLIA_JAR:?set FOLIA_JAR to a Folia 26.2 jar built from 57f643f10e0a9d01024773232d38ae666067d593}"
+: "${FOLIA_JAR:?set FOLIA_JAR to the published Folia 26.2 build-1 jar}"
 : "${FOLIA_JAR_SHA256:?set FOLIA_JAR_SHA256 to the exact supplied jar SHA-256}"
 : "${STEEL_WORLDGEN_BUILD_ID:?set STEEL_WORLDGEN_BUILD_ID to an immutable source/image identifier}"
 : "${STEEL_WORLDGEN_SOURCE_URL:?set the exact public corresponding-source URL}"
@@ -10,6 +10,7 @@ export STEEL_WORLDGEN_BUILD_ID STEEL_WORLDGEN_SOURCE_URL
 : "${ACCEPT_MINECRAFT_EULA:?set ACCEPT_MINECRAFT_EULA=true after reading the Minecraft EULA}"
 [[ "$ACCEPT_MINECRAFT_EULA" == true ]] || { echo "ACCEPT_MINECRAFT_EULA must equal true" >&2; exit 2; }
 PINNED_FOLIA_JAR_SHA256=6726da42d6a4edc4961a43cdccfd7ebf5fea75e7b1342266532ed143df6736e7
+PINNED_FOLIA_BUILD_REVISION=e48800d
 [[ "$FOLIA_JAR_SHA256" == "$PINNED_FOLIA_JAR_SHA256" ]] || {
   echo "FOLIA_JAR_SHA256 must equal the pinned Folia 26.2 build-1 digest" >&2
   exit 2
@@ -201,7 +202,10 @@ for _ in $(seq 1 180); do
   sleep 1
 done
 grep -q 'Done (' "$OUT/folia.log" || { tail -150 "$OUT/folia.log" >&2; exit 1; }
-grep -q '57f643f' "$OUT/folia.log" || { echo 'Folia source pin mismatch' >&2; exit 1; }
+grep -Fq "Folia 26.2-1-ver/26.2.x@$PINNED_FOLIA_BUILD_REVISION" "$OUT/folia.log" || {
+  echo 'published Folia build revision mismatch' >&2
+  exit 1
+}
 grep -Fq "Pinned Steel worker profile $profile_sha256" "$OUT/folia.log" || {
   echo 'Steel plugin did not load the pinned worker profile' >&2
   exit 1
@@ -296,7 +300,8 @@ summary = {
         "steel_head": sys.argv[5],
         "steel_version": profile["steel_version"],
         "minecraft_version": profile["minecraft_version"],
-        "folia_commit": "57f643f10e0a9d01024773232d38ae666067d593",
+        "folia_published_build_revision": "e48800d",
+        "folia_importer_source_commit": "57f643f10e0a9d01024773232d38ae666067d593",
         "paper_commit": "1f7285664c3a11690a641e19ffcc90321fcc7fde",
         "azalea_commit": "6249c295d353b9b3ef68f665b311cba39211fd19",
         "folia_jar_sha256": sys.argv[2],
