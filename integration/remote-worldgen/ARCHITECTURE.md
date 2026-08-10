@@ -57,15 +57,15 @@ The fork must:
 
 1. Reserve and construct dependencies through `ChunkTaskScheduler` exactly as today.
 2. Build a request only for a fresh center chunk under a startup-pinned worker profile.
-3. Return a non-blocking future; `ChunkUpgradeGenericStatusTask` currently calls `.join()` on an incomplete status future and must complete progression from a continuation. Cancellation of an already-running status must retain chunk protections until the physical source future drains; cancelling only a dependent `CompletableFuture` is not upstream cancellation.
+3. Return a non-blocking future. The pinned upstream `ChunkUpgradeGenericStatusTask` calls `.join()` on an incomplete status future; patch `0011` replaces that contract with continuation-driven completion and removes the obsolete incomplete-future warning. Cancellation of an already-running status must retain chunk protections until the physical source future drains and linearize against commit; cancelling only a dependent `CompletableFuture` is not upstream cancellation.
 4. Verify response identity, request key, fingerprints, byte length/hash, semantic bounds, registry names/properties, and complete context before mutation.
 5. Apply blocks, both WG heightmaps, and post-processing offsets directly to the center `ProtoChunk`.
 6. Publish NOISE only after the complete validated apply. No partial mutation may escape.
-7. Propagate Moonrise cancellation and priority changes to the client. The worker cooperatively drops queued requests, but Steel currently cannot interrupt synchronous stage code, so cancellation may suppress publication while already-started bounded physical work drains.
+7. Propagate Moonrise cancellation to the client; a production extension must also transfer initial and updated priorities. V1 has no priority field/update RPC. The worker cooperatively drops queued requests, but Steel currently cannot interrupt synchronous stage code, so cancellation may suppress publication while already-started bounded physical work drains.
 8. Define an explicit retry/fail-local/fail-world policy. Current Moonrise sends non-cancellation generation exceptions to `unrecoverableChunkSystemFailure`; silently substituting local generation after partial remote acceptance is unsafe.
 9. Reject blending and retrogen until their complete input and mutation semantics are implemented.
 
-The complete experimental importer overlay is provided in `integration/folia-fork/`. Its scheduler and configuration patches plus ordinary Java importer sources apply cleanly to the pinned head, and `:folia-server:compileJava` passes under Java 25. Compilation proves API compatibility, not runtime world-generation parity.
+The complete experimental importer overlay is provided in `integration/folia-fork/`. Its scheduler and configuration patches plus ordinary Java importer sources apply cleanly to the pinned head under Java 25. Maintained native tests exercise response rejection, real-`ProtoChunk` detached prepare/atomic commit, commit preconditions, and cancellation linearization; the plugin-free harness supplies the separate runtime exploration and persistence proof.
 
 The old `ChunkMap.scheduleChunkLoad`, `GenerationChunkHolder.applyStep`, and similar vanilla paths throw `UnsupportedOperationException` in current Folia and are not integration points. Velocity has no chunk-generation lifecycle and is also not an integration point.
 

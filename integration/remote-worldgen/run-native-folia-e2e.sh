@@ -3,8 +3,7 @@ set -euo pipefail
 
 : "${ACCEPT_MINECRAFT_EULA:?set ACCEPT_MINECRAFT_EULA=true after reviewing the Minecraft EULA}"
 [[ "$ACCEPT_MINECRAFT_EULA" == true ]] || { echo 'ACCEPT_MINECRAFT_EULA must equal true' >&2; exit 2; }
-: "${FOLIA_SOURCE_DIR:?set the pinned patched Folia source checkout}"
-: "${FOLIA_NATIVE_JAR:?set the Paperclip JAR built from that checkout}"
+: "${FOLIA_SOURCE_DIR:?set the pinned Folia upstream source checkout}"
 : "${STEEL_WORLDGEN_BUILD_ID:?set the immutable Steel build identity}"
 : "${STEEL_WORLDGEN_SOURCE_URL:?set the exact public corresponding-source URL}"
 
@@ -16,15 +15,31 @@ SERVER_PORT=${STEEL_NATIVE_SERVER_PORT:-25591}
 SEED=${STEEL_NATIVE_SEED:-13579}
 WAYPOINTS=${STEEL_CLIENT_WAYPOINTS:-'0,0;512,0;512,512;0,512'}
 JAVA_BIN=${JAVA_BIN:-java}
+OUTPUT=$(python3 - "$OUTPUT" "$ROOT" "$FOLIA_SOURCE_DIR" <<'PY'
+from pathlib import Path
+import sys
+import tempfile
+output = Path(sys.argv[1]).resolve()
+repository = Path(sys.argv[2]).resolve()
+folia = Path(sys.argv[3]).resolve()
+repository_artifacts = (repository / "artifacts").resolve()
+temporary_root = Path(tempfile.gettempdir()).resolve()
+within = lambda child, parent: child != parent and parent in child.parents
+overlaps = lambda left, right: left == right or left in right.parents or right in left.parents
+allowed_repository_output = within(output, repository_artifacts)
+allowed_temporary_output = within(output, temporary_root) and not overlaps(output, repository) and not overlaps(output, folia)
+if not (allowed_repository_output or allowed_temporary_output):
+    raise SystemExit(f"native evidence output must be below {repository_artifacts} or a separate child of {temporary_root}: {output}")
+print(output)
+PY
+)
 
-[[ -f "$FOLIA_NATIVE_JAR" ]] || { echo "missing FOLIA_NATIVE_JAR: $FOLIA_NATIVE_JAR" >&2; exit 2; }
-[[ -d "$FOLIA_SOURCE_DIR/.git" ]] || { echo "FOLIA_SOURCE_DIR is not a git checkout" >&2; exit 2; }
-[[ "$(git -C "$FOLIA_SOURCE_DIR" rev-parse HEAD)" == "$FOLIA_SOURCE_REVISION" ]] || {
-  echo "Folia source must be $FOLIA_SOURCE_REVISION" >&2
+[[ "$(git -C "$FOLIA_SOURCE_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || {
+  echo "FOLIA_SOURCE_DIR is not a git checkout" >&2
   exit 2
 }
-[[ -f "$FOLIA_SOURCE_DIR/folia-server/src/main/java/io/papermc/paper/worldgen/steel/SteelRemoteNoise.java" ]] || {
-  echo 'the maintained Steel Folia overlay is not applied' >&2
+[[ "$(git -C "$FOLIA_SOURCE_DIR" rev-parse HEAD)" == "$FOLIA_SOURCE_REVISION" ]] || {
+  echo "Folia source must be $FOLIA_SOURCE_REVISION" >&2
   exit 2
 }
 [[ "$($JAVA_BIN -version 2>&1 | awk -F '[".]' '/version/ {print $2; exit}')" == 25 ]] || {
@@ -37,9 +52,72 @@ JAVA_BIN=${JAVA_BIN:-java}
   exit 2
 }
 
-rm -rf "$OUTPUT"
+OVERLAY_DIR="$ROOT/integration/folia-fork/folia-server"
+FOLIA_BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/steel-folia-build.XXXXXX")
+rmdir "$FOLIA_BUILD_DIR"
+cleanup_build() {
+  if [[ -n "${FOLIA_BUILD_DIR:-}" ]]; then
+    git -C "$FOLIA_SOURCE_DIR" worktree remove --force "$FOLIA_BUILD_DIR" >/dev/null 2>&1 || true
+    rm -rf -- "$FOLIA_BUILD_DIR"
+    git -C "$FOLIA_SOURCE_DIR" worktree prune >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_build EXIT
+git -C "$FOLIA_SOURCE_DIR" worktree add --detach "$FOLIA_BUILD_DIR" "$FOLIA_SOURCE_REVISION"
+cp -a "$OVERLAY_DIR"/. "$FOLIA_BUILD_DIR/folia-server/"
+overlay_sha=$(python3 - "$OVERLAY_DIR" "$FOLIA_BUILD_DIR/folia-server" <<'PY'
+import hashlib
+from pathlib import Path
+import subprocess
+import sys
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+source_files = sorted(path for path in source.rglob("*") if path.is_file())
+allowed_changes = {"folia-server/" + path.relative_to(source).as_posix() for path in source_files}
+status = subprocess.run(
+    ["git", "-C", str(target.parent), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    check=True,
+    stdout=subprocess.PIPE,
+).stdout
+for record in status.split(b"\0"):
+    if not record:
+        continue
+    code = record[:2].decode("ascii")
+    if "R" in code or "C" in code:
+        raise SystemExit("renamed/copied files are not allowed in the Folia evidence checkout")
+    path = record[3:].decode()
+    if path not in allowed_changes:
+        raise SystemExit(f"unexpected change in Folia evidence checkout: {code} {path}")
+digest = hashlib.sha256()
+for path in source_files:
+    relative = path.relative_to(source).as_posix().encode()
+    data = path.read_bytes()
+    installed = target / path.relative_to(source)
+    if not installed.is_file() or installed.read_bytes() != data:
+        raise SystemExit(f"Folia overlay file is missing or differs: {installed}")
+    digest.update(len(relative).to_bytes(8, "big"))
+    digest.update(relative)
+    digest.update(len(data).to_bytes(8, "big"))
+    digest.update(data)
+print(digest.hexdigest())
+PY
+)
+java_path=$(command -v "$JAVA_BIN")
+export JAVA_HOME
+JAVA_HOME=$(dirname "$(dirname "$(readlink -f "$java_path")")")
+/usr/bin/timeout 1200s "$FOLIA_BUILD_DIR/gradlew" -p "$FOLIA_BUILD_DIR" \
+  applyAllPatches :folia-server:createPaperclipJar --no-daemon --no-configuration-cache
+mapfile -t paperclips < <(find "$FOLIA_BUILD_DIR/folia-server/build/libs" -maxdepth 1 -type f -name 'folia-paperclip-*.jar' -print)
+[[ "${#paperclips[@]}" == 1 ]] || { printf 'Paperclip build produced %s candidate outputs\n' "${#paperclips[@]}" >&2; exit 2; }
+FOLIA_NATIVE_JAR=${paperclips[0]}
+
+rm -rf -- "$OUTPUT"
 mkdir -p "$OUTPUT/server/config"
 cp "$FOLIA_NATIVE_JAR" "$OUTPUT/server/folia.jar"
+cleanup_build
+FOLIA_BUILD_DIR=
+trap - EXIT
+"$JAVA_BIN" -version > "$OUTPUT/java-version.txt" 2>&1
 printf 'eula=true\n' > "$OUTPUT/server/eula.txt"
 cat > "$OUTPUT/server/server.properties" <<EOF
 online-mode=false
@@ -180,14 +258,20 @@ wait "$worker_pid"
 worker_pid=
 trap - EXIT
 
-python3 - "$OUTPUT" "$FOLIA_SOURCE_REVISION" <<'PY'
+python3 - "$OUTPUT" "$FOLIA_SOURCE_REVISION" "$overlay_sha" "$ROOT" "$STEEL_WORLDGEN_BUILD_ID" "$STEEL_WORLDGEN_SOURCE_URL" <<'PY'
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
+repository = Path(sys.argv[4])
 load = lambda name: json.loads((root / name).read_text())
+sha256 = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
 identity = load("identity.json")
 client_native = load("client-native.json")
 client_restart = load("client-restart.json")
@@ -196,20 +280,46 @@ after = load("metrics-after-native.json")
 restart_before = load("metrics-before-restart.json")
 restart_after = load("metrics-after-restart.json")
 for client in (client_native, client_restart):
-    assert client["ok"] and client["protocol"] == 776
-    assert all(count >= 9 for count in client["unique_chunks_by_phase"])
-assert after["succeeded"] > before["succeeded"]
-assert after["failed"] == 0 and after["cancelled"] == 0 and after["in_flight"] == 0
-assert restart_after == restart_before, "disabled importer contacted the worker during restart"
+    require(client["ok"] and client["protocol"] == 776, "protocol-776 client phase failed")
+    require(all(count >= 9 for count in client["unique_chunks_by_phase"]), "client phase delivered too few chunks")
+require(after["succeeded"] > before["succeeded"], "native importer did not generate through the worker")
+require(after["failed"] == 0 and after["cancelled"] == 0 and after["in_flight"] == 0, "worker reported failed, cancelled, or active native requests")
+require(restart_after == restart_before, "disabled importer contacted the worker during restart")
 for name in ("folia-native.log", "folia-restart.log"):
     log = (root / name).read_text(errors="replace").lower()
-    assert "chunk system error" not in log and "unrecoverablechunksystemfailure" not in log
+    require("chunk system error" not in log and "unrecoverablechunksystemfailure" not in log, f"chunk-system failure in {name}")
+    require("future status not complete after scheduling" not in log, f"obsolete synchronous-future warning in {name}")
+require("steel remote noise enabled" in (root / "folia-native.log").read_text(errors="replace").lower(), "native importer did not enable")
+require(identity["build"]["external_build_id"] == sys.argv[5], "worker build identity mismatch")
+require(identity["build"]["source_url"] == sys.argv[6], "worker corresponding-source URL mismatch")
+raw_names = (
+    "identity.json",
+    "client-native.json",
+    "client-restart.json",
+    "metrics-before.json",
+    "metrics-after-native.json",
+    "metrics-before-restart.json",
+    "metrics-after-restart.json",
+    "worker.log",
+    "folia-native.log",
+    "folia-restart.log",
+    "java-version.txt",
+)
 summary = {
-    "schema": "steel-native-folia-importer-e2e-v1",
+    "schema": "steel-native-folia-importer-e2e-v2",
+    "created_at_utc": datetime.now(timezone.utc).isoformat(),
     "native_importer": True,
     "persisted_restart": True,
-    "patched_folia_source_revision": sys.argv[2],
-    "folia_jar_sha256": hashlib.sha256((root / "server/folia.jar").read_bytes()).hexdigest(),
+    "folia_upstream_revision": sys.argv[2],
+    "folia_overlay_sha256": sys.argv[3],
+    "folia_jar_sha256": sha256(root / "server/folia.jar"),
+    "harness_sha256": sha256(repository / "integration/remote-worldgen/run-native-folia-e2e.sh"),
+    "binary_sha256": {
+        "steel-worldgen-service": sha256(repository / "target/release/steel-worldgen-service"),
+        "steel-worldgen-probe": sha256(repository / "target/release/steel-worldgen-probe"),
+        "steel-worldgen-client-bot": sha256(repository / "integration/client-bot/target/release/steel-worldgen-client-bot"),
+    },
+    "raw_files_sha256": {name: sha256(root / name) for name in raw_names},
     "client_native": client_native,
     "client_restart": client_restart,
     "worker_delta_native": {key: after[key] - before[key] for key in ("requests", "succeeded", "failed", "cancelled", "cache_hits")},

@@ -7,6 +7,10 @@ set -euo pipefail
 : "${STEEL_WORLDGEN_SOURCE_URL:?set the exact public corresponding-source URL}"
 export STEEL_WORLDGEN_BUILD_ID STEEL_WORLDGEN_SOURCE_URL
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+HEAD=$(git -C "$ROOT" rev-parse HEAD)
+[[ -z "$(git -C "$ROOT" status --porcelain)" ]] || { echo 'Steel source tree must be clean before golden regeneration' >&2; exit 2; }
+[[ "$STEEL_WORLDGEN_BUILD_ID" == "$HEAD" ]] || { echo 'STEEL_WORLDGEN_BUILD_ID must equal Steel HEAD' >&2; exit 2; }
+[[ "$STEEL_WORLDGEN_SOURCE_URL" == *"$HEAD"* ]] || { echo 'STEEL_WORLDGEN_SOURCE_URL must identify Steel HEAD' >&2; exit 2; }
 PORT=${STEEL_GOLDEN_PORT:-50082}
 ASSET="$ROOT/steel-worldgen-service/test_assets/noise-v1-overworld-seed-13579-x-6-z2.pb"
 TMP=$(mktemp -d)

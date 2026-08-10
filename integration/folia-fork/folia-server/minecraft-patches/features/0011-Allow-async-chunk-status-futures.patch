@@ -6,38 +6,91 @@ Subject: [PATCH] Allow asynchronous chunk status futures
 Status implementations such as a remote NOISE importer must be able to
 complete without blocking a Moonrise generation executor. A cancellation
 that races a running status suppresses publication but deliberately keeps
-chunk protections until the physical status future drains.
+chunk protections until the physical status future drains. The previous
+incomplete-future warning described the old synchronous contract and is
+removed with that contract.
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java
-@@ -95,13 +95,13 @@
-                     this.complete(chunk, null);
+@@ -21,6 +21,7 @@
+ import java.lang.invoke.VarHandle;
+ import java.util.Map;
+ import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.atomic.AtomicInteger;
+ 
+ public final class ChunkUpgradeGenericStatusTask extends ChunkProgressionTask implements Runnable {
+ 
+@@ -87,31 +88,22 @@
+             generation = !chunk.getPersistedStatus().isOrAfter(this.toStatus);
+             if (generation) {
+                 if (((ChunkSystemChunkStatus)this.toStatus).moonrise$isEmptyGenStatus()) {
+-                    if (chunk instanceof ProtoChunk) {
+-                        ((ProtoChunk)chunk).setPersistedStatus(this.toStatus);
+-                    }
+                     completing = true;
+-                    this.complete(chunk, null);
++                    this.completeClaimed(chunk, null, true);
                      return;
                  }
-                 completeFuture = ChunkPyramid.GENERATION_PYRAMID.getStepTo(this.toStatus).apply(ctx, this.neighbours, this.fromChunk)
+-                completeFuture = ChunkPyramid.GENERATION_PYRAMID.getStepTo(this.toStatus).apply(ctx, this.neighbours, this.fromChunk)
 -                        .whenComplete((final ChunkAccess either, final Throwable throwable) -> {
 -                                    if (either instanceof ProtoChunk proto) {
 -                                        proto.setPersistedStatus(ChunkUpgradeGenericStatusTask.this.toStatus);
 -                                    }
 -                                }
 -                        );
-+                        .thenApply((final ChunkAccess either) -> {
-+                            if (either instanceof ProtoChunk proto) {
-+                                proto.setPersistedStatus(ChunkUpgradeGenericStatusTask.this.toStatus);
-+                            }
-+                            return either;
-+                        });
++                completeFuture = ChunkPyramid.GENERATION_PYRAMID.getStepTo(this.toStatus).apply(ctx, this.neighbours, this.fromChunk);
              } else {
                  if (((ChunkSystemChunkStatus)this.toStatus).moonrise$isEmptyLoadStatus()) {
                      completing = true;
-@@ -134,28 +134,29 @@
-             LOGGER.warn("Future status not complete after scheduling: " + this.toStatus.toString() + ", generate: " + generation);
+-                    this.complete(chunk, null);
++                    this.completeClaimed(chunk, null, false);
+                     return;
+                 }
+                 completeFuture = ChunkPyramid.LOADING_PYRAMID.getStepTo(this.toStatus).apply(ctx, this.neighbours, this.fromChunk);
+             }
+         } catch (final Throwable throwable) {
+             if (!completing) {
+-                this.complete(null, throwable);
++                this.completeClaimed(null, throwable, false);
+                 return;
+             }
+ 
+@@ -130,32 +122,75 @@
+             return;
          }
  
+-        if (!completeFuture.isDone() && !((ChunkSystemChunkStatus)this.toStatus).moonrise$getWarnedAboutNoImmediateComplete().getAndSet(true)) {
+-            LOGGER.warn("Future status not complete after scheduling: " + this.toStatus.toString() + ", generate: " + generation);
+-        }
+-
 -        final ChunkAccess newChunk;
 -
--        try {
++        completeFuture.whenComplete((final ChunkAccess newChunk, final Throwable throwable) ->
++                this.completeClaimed(newChunk, throwable, generation));
++    }
++
++    private void completeClaimed(final ChunkAccess chunk, final Throwable throwable, final boolean generation) {
++        final int previous = this.completionGate.claimCompletion();
++        if (previous == CompletionGate.COMPLETING) {
++            return;
++        }
++        if (previous == CompletionGate.CANCELLED || isCancellation(throwable)) {
++            this.complete(null, null);
++            return;
++        }
++        if (throwable != null) {
++            this.complete(null, throwable);
++            return;
++        }
++        if (chunk == null) {
++            this.complete(null, new IllegalStateException(
++                    "Chunk for status: " + this.toStatus + " should not be null"
++            ).fillInStackTrace());
++            return;
++        }
+         try {
 -            newChunk = completeFuture.join();
 -        } catch (final Throwable throwable) {
 -            this.complete(null, throwable);
@@ -57,37 +110,64 @@ diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkU
 -        this.complete(newChunk, null);
 -    }
 -
-+        completeFuture.whenComplete((final ChunkAccess newChunk, final Throwable throwable) -> {
-+            if (this.cancelled) {
-+                this.complete(null, null);
-+                return;
++            if (generation && chunk instanceof ProtoChunk proto) {
++                proto.setPersistedStatus(this.toStatus);
 +            }
-+            if (throwable != null) {
-+                this.complete(null, throwable);
-+                return;
-+            }
-+            if (newChunk == null) {
-+                this.complete(null,
-+                        new IllegalStateException(
-+                                "Chunk for status: " + ChunkUpgradeGenericStatusTask.this.toStatus.toString()
-+                                        + ", generation: " + generation + " should not be null! Future: " + completeFuture
-+                        ).fillInStackTrace()
-+                );
-+                return;
-+            }
-+            this.complete(newChunk, null);
-+        });
++            this.complete(chunk, null);
++        } catch (final Throwable completionFailure) {
++            this.complete(null, completionFailure);
++        }
 +    }
 +
-+    private volatile boolean cancelled;
++    private static boolean isCancellation(Throwable throwable) {
++        while (throwable != null) {
++            if (throwable instanceof java.util.concurrent.CancellationException) {
++                return true;
++            }
++            throwable = throwable.getCause();
++        }
++        return false;
++    }
++
++    public static final class CompletionGate {
++        public static final int ACTIVE = 0;
++        public static final int CANCELLED = 1;
++        public static final int COMPLETING = 2;
++
++        private final AtomicInteger state = new AtomicInteger(ACTIVE);
++
++        public int claimCompletion() {
++            for (;;) {
++                final int current = this.state.get();
++                if (current == COMPLETING || this.state.compareAndSet(current, COMPLETING)) {
++                    return current;
++                }
++            }
++        }
++
++        public boolean requestCancellation() {
++            return this.state.compareAndSet(ACTIVE, CANCELLED);
++        }
++
++        public int state() {
++            return this.state.get();
++        }
++    }
++
++    private final CompletionGate completionGate = new CompletionGate();
      private volatile boolean scheduled;
      private static final VarHandle SCHEDULED_HANDLE = ConcurrentUtil.getVarHandle(ChunkUpgradeGenericStatusTask.class, "scheduled", boolean.class);
  
-@@ -180,6 +181,7 @@
+@@ -180,8 +215,11 @@
  
      @Override
      public void cancel() {
-+        this.cancelled = true;
++        if (!this.completionGate.requestCancellation()) {
++            return;
++        }
          if (this.generateTask.cancel()) {
-             this.complete(null, null);
+-            this.complete(null, null);
++            this.completeClaimed(null, null, false);
          }
+     }
+ 

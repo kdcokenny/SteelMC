@@ -301,7 +301,7 @@ summary = {
         "steel_version": profile["steel_version"],
         "minecraft_version": profile["minecraft_version"],
         "folia_published_build_revision": "e48800d",
-        "folia_importer_source_commit": "57f643f10e0a9d01024773232d38ae666067d593",
+        "maintained_importer_upstream_pin": "57f643f10e0a9d01024773232d38ae666067d593",
         "paper_commit": "1f7285664c3a11690a641e19ffcc90321fcc7fde",
         "azalea_commit": "6249c295d353b9b3ef68f665b311cba39211fd19",
         "folia_jar_sha256": sys.argv[2],

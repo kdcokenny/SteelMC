@@ -11,6 +11,8 @@ cp -a integration/folia-fork/folia-server/. /tmp/folia-26.2/folia-server/
 cd /tmp/folia-26.2
 ./gradlew applyAllPatches --no-daemon --no-configuration-cache
 ./gradlew :folia-server:compileJava --no-daemon --no-configuration-cache
+./gradlew :folia-server:test --tests org.bukkit.support.suite.NormalTestSuite --no-daemon --no-configuration-cache
+./gradlew :folia-server:test --tests org.bukkit.support.suite.VanillaFeatureTestSuite --no-daemon --no-configuration-cache
 ```
 
 The fork owns the native hook. The Bukkit plugin under `../folia-plugin`
@@ -85,9 +87,11 @@ cmp steel-worldgen-service/proto/steel/worldgen/v1/worldgen.proto \
 
 ## Patch queue
 
-* `0011-Allow-async-chunk-status-futures.patch` removes the immediate `.join`,
-  retains Moonrise protections until physical completion, and publishes status
-  only on success.
+* `0011-Allow-async-chunk-status-futures.patch` removes the immediate `.join` and
+  obsolete incomplete-future warning, retains Moonrise protections until physical
+  completion, and publishes status only after uncancelled success. Cancellation is
+  linearized against the importer commit so either cancellation suppresses mutation
+  and publication or a winning commit publishes normally.
 * `0012-Use-Steel-remote-NOISE.patch` installs the internal hook, bootstrap,
   close, and cooperative cancellation forwarding.
 * Paper patch `0008-Configure-Steel-remote-worldgen.patch` adds startup-only
@@ -95,6 +99,9 @@ cmp steel-worldgen-service/proto/steel/worldgen/v1/worldgen.proto \
 * `build.gradle.kts.patch` pins protobuf/gRPC generation and runtime libraries.
 * `src/main/java/io/papermc/paper/worldgen/steel/` contains ordinary fork
   sources; generated protobuf Java is never checked in or modified.
+* Maintained native tests cover commit/cancellation linearization, response-envelope
+  limits and identity, detached real-`ProtoChunk` preparation, late malformed-data
+  rejection, atomic assignment, and commit-precondition failure.
 
 ## Upstream provenance and licensing
 

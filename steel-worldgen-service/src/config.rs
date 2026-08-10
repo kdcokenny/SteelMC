@@ -215,3 +215,280 @@ fn parse_u64(name: &str, default: u64) -> Result<u64> {
         Err(error) => bail!("failed to read {name}: {error}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{env, process::Command};
+
+    use super::Config;
+
+    const CHILD_MARKER: &str = "STEEL_CONFIG_TEST_CHILD";
+    const EXPECTED_ERROR: &str = "STEEL_CONFIG_TEST_EXPECT_ERROR";
+
+    #[test]
+    fn from_env_child() {
+        if env::var_os(CHILD_MARKER).is_none() {
+            return;
+        }
+        let result = Config::from_env();
+        if let Ok(expected) = env::var(EXPECTED_ERROR) {
+            let error = result.expect_err("configuration unexpectedly succeeded");
+            assert!(
+                format!("{error:#}").contains(&expected),
+                "configuration error did not contain {expected:?}: {error:#}"
+            );
+        } else {
+            result.expect("configuration unexpectedly failed");
+        }
+    }
+
+    fn run_case(name: &str, values: &[(&str, &str)], expected_error: Option<&str>) {
+        let executable = env::current_exe().expect("test executable should have a path");
+        let mut command = Command::new(executable);
+        command
+            .arg("--exact")
+            .arg("config::tests::from_env_child")
+            .arg("--nocapture")
+            .env_clear()
+            .env(CHILD_MARKER, "true")
+            .env("STEEL_WORLDGEN_SEED", "0");
+        for &(key, value) in values {
+            command.env(key, value);
+        }
+        if let Some(expected) = expected_error {
+            command.env(EXPECTED_ERROR, expected);
+        }
+        let output = command.output().expect("configuration child should run");
+        assert!(
+            output.status.success(),
+            "configuration case {name:?} failed:
+stdout:
+{}
+stderr:
+{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn from_env_enforces_remote_security_policy() {
+        run_case("loopback plaintext", &[], None);
+        run_case(
+            "remote plaintext refused",
+            &[
+                ("STEEL_WORLDGEN_BIND", "0.0.0.0:50051"),
+                ("STEEL_WORLDGEN_SOURCE_URL", "https://example.test/source"),
+            ],
+            Some("plaintext workers may only bind loopback"),
+        );
+        run_case(
+            "remote plaintext needs source offer",
+            &[
+                ("STEEL_WORLDGEN_BIND", "0.0.0.0:50051"),
+                ("STEEL_WORLDGEN_ALLOW_INSECURE_REMOTE", "true"),
+            ],
+            Some("non-loopback workers require STEEL_WORLDGEN_SOURCE_URL"),
+        );
+        run_case(
+            "explicit remote plaintext",
+            &[
+                ("STEEL_WORLDGEN_BIND", "0.0.0.0:50051"),
+                ("STEEL_WORLDGEN_ALLOW_INSECURE_REMOTE", "true"),
+                ("STEEL_WORLDGEN_SOURCE_URL", "https://example.test/source"),
+            ],
+            None,
+        );
+        for (name, tls) in [
+            (
+                "certificate only",
+                vec![("STEEL_WORLDGEN_TLS_CERT", "/cert")],
+            ),
+            ("key only", vec![("STEEL_WORLDGEN_TLS_KEY", "/key")]),
+            ("ca only", vec![("STEEL_WORLDGEN_TLS_CLIENT_CA", "/ca")]),
+            (
+                "certificate and key",
+                vec![
+                    ("STEEL_WORLDGEN_TLS_CERT", "/cert"),
+                    ("STEEL_WORLDGEN_TLS_KEY", "/key"),
+                ],
+            ),
+            (
+                "certificate and ca",
+                vec![
+                    ("STEEL_WORLDGEN_TLS_CERT", "/cert"),
+                    ("STEEL_WORLDGEN_TLS_CLIENT_CA", "/ca"),
+                ],
+            ),
+            (
+                "key and ca",
+                vec![
+                    ("STEEL_WORLDGEN_TLS_KEY", "/key"),
+                    ("STEEL_WORLDGEN_TLS_CLIENT_CA", "/ca"),
+                ],
+            ),
+        ] {
+            run_case(name, &tls, Some("TLS requires"));
+        }
+        run_case(
+            "complete remote TLS",
+            &[
+                ("STEEL_WORLDGEN_BIND", "0.0.0.0:50051"),
+                ("STEEL_WORLDGEN_SOURCE_URL", "https://example.test/source"),
+                ("STEEL_WORLDGEN_TLS_CERT", "/cert"),
+                ("STEEL_WORLDGEN_TLS_KEY", "/key"),
+                ("STEEL_WORLDGEN_TLS_CLIENT_CA", "/ca"),
+            ],
+            None,
+        );
+        run_case(
+            "invalid insecure flag",
+            &[("STEEL_WORLDGEN_ALLOW_INSECURE_REMOTE", "yes")],
+            Some("must be true or false"),
+        );
+        for (name, source) in [
+            ("non-http source", "ftp://example.test/source"),
+            (
+                "source control character",
+                "https://example.test/source
+",
+            ),
+        ] {
+            run_case(
+                name,
+                &[("STEEL_WORLDGEN_SOURCE_URL", source)],
+                Some("must be a printable HTTP(S) URL"),
+            );
+        }
+    }
+
+    #[test]
+    fn from_env_enforces_resource_and_string_bounds() {
+        for (name, values) in [
+            (
+                "minimum bounds",
+                vec![
+                    ("STEEL_WORLDGEN_THREADS", "1"),
+                    ("STEEL_WORLDGEN_MAX_IN_FLIGHT", "1"),
+                    ("STEEL_WORLDGEN_MAX_IN_FLIGHT_PER_PEER", "1"),
+                    ("STEEL_WORLDGEN_REQUEST_TIMEOUT_MS", "1"),
+                    ("STEEL_WORLDGEN_MAX_CACHE_ENTRIES", "0"),
+                    ("STEEL_WORLDGEN_MAX_CACHE_BYTES", "0"),
+                    ("STEEL_WORLDGEN_PROFILE_ID", "x"),
+                ],
+            ),
+            (
+                "maximum bounds",
+                vec![
+                    ("STEEL_WORLDGEN_THREADS", "1"),
+                    ("STEEL_WORLDGEN_MAX_IN_FLIGHT", "4096"),
+                    ("STEEL_WORLDGEN_MAX_IN_FLIGHT_PER_PEER", "4096"),
+                    ("STEEL_WORLDGEN_REQUEST_TIMEOUT_MS", "600000"),
+                    ("STEEL_WORLDGEN_MAX_CACHE_ENTRIES", "1000000"),
+                    ("STEEL_WORLDGEN_MAX_CACHE_BYTES", "68719476736"),
+                    (
+                        "STEEL_WORLDGEN_PROFILE_ID",
+                        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                    ),
+                ],
+            ),
+        ] {
+            run_case(name, &values, None);
+        }
+        for (name, values, error) in [
+            (
+                "zero threads",
+                vec![("STEEL_WORLDGEN_THREADS", "0")],
+                "STEEL_WORLDGEN_THREADS=1",
+            ),
+            (
+                "multiple threads",
+                vec![("STEEL_WORLDGEN_THREADS", "2")],
+                "STEEL_WORLDGEN_THREADS=1",
+            ),
+            (
+                "zero global admission",
+                vec![("STEEL_WORLDGEN_MAX_IN_FLIGHT", "0")],
+                "max in flight must be",
+            ),
+            (
+                "global admission too large",
+                vec![("STEEL_WORLDGEN_MAX_IN_FLIGHT", "4097")],
+                "max in flight must be",
+            ),
+            (
+                "zero peer admission",
+                vec![("STEEL_WORLDGEN_MAX_IN_FLIGHT_PER_PEER", "0")],
+                "max in flight per peer",
+            ),
+            (
+                "peer admission exceeds global",
+                vec![
+                    ("STEEL_WORLDGEN_MAX_IN_FLIGHT", "1"),
+                    ("STEEL_WORLDGEN_MAX_IN_FLIGHT_PER_PEER", "2"),
+                ],
+                "max in flight per peer",
+            ),
+            (
+                "zero timeout",
+                vec![("STEEL_WORLDGEN_REQUEST_TIMEOUT_MS", "0")],
+                "request timeout must be",
+            ),
+            (
+                "timeout too large",
+                vec![("STEEL_WORLDGEN_REQUEST_TIMEOUT_MS", "600001")],
+                "request timeout must be",
+            ),
+            (
+                "cache entries too large",
+                vec![("STEEL_WORLDGEN_MAX_CACHE_ENTRIES", "1000001")],
+                "max cache entries",
+            ),
+            (
+                "cache bytes too large",
+                vec![("STEEL_WORLDGEN_MAX_CACHE_BYTES", "68719476737")],
+                "max cache bytes",
+            ),
+            (
+                "empty profile",
+                vec![("STEEL_WORLDGEN_PROFILE_ID", "")],
+                "profile id must contain",
+            ),
+            (
+                "long profile",
+                vec![(
+                    "STEEL_WORLDGEN_PROFILE_ID",
+                    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                )],
+                "profile id must contain",
+            ),
+            (
+                "profile control character",
+                vec![(
+                    "STEEL_WORLDGEN_PROFILE_ID",
+                    "bad
+profile",
+                )],
+                "profile id must contain",
+            ),
+        ] {
+            run_case(name, &values, Some(error));
+        }
+        run_case(
+            "maximum source URL length",
+            &[(
+                "STEEL_WORLDGEN_SOURCE_URL",
+                &format!("https://{}", "x".repeat(2040)),
+            )],
+            None,
+        );
+        run_case(
+            "source URL too long",
+            &[(
+                "STEEL_WORLDGEN_SOURCE_URL",
+                &format!("https://{}", "x".repeat(2041)),
+            )],
+            Some("no longer than 2048 bytes"),
+        );
+    }
+}

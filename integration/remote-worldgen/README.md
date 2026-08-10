@@ -24,20 +24,19 @@ ACCEPT_MINECRAFT_EULA=true \
 ./integration/remote-worldgen/run-e2e.sh
 ```
 
-Apply and compile the experimental internal Folia importer separately using [`../folia-fork/README.md`](../folia-fork/README.md); the Bukkit projection E2E uses the published Folia JAR and is not native-importer evidence. The separate native harness takes the pinned patched source checkout and its locally built Paperclip:
+Apply the experimental internal Folia importer separately using [`../folia-fork/README.md`](../folia-fork/README.md); the Bukkit projection E2E uses the published Folia JAR and is not native-importer evidence. The separate native harness creates a clean detached worktree from the pinned checkout, verifies every maintained overlay input, reapplies the patches, and builds its Paperclip there before running:
 
 ```bash
 FOLIA_SOURCE_DIR=/tmp/folia-26.2 \
-FOLIA_NATIVE_JAR=/tmp/folia-26.2/folia-server/build/libs/folia-paperclip-26.2.local-SNAPSHOT.jar \
 STEEL_WORLDGEN_BUILD_ID="$(git rev-parse HEAD)" \
 STEEL_WORLDGEN_SOURCE_URL="https://github.com/Steel-Foundation/SteelMC/tree/$(git rev-parse HEAD)" \
 ACCEPT_MINECRAFT_EULA=true \
 ./integration/remote-worldgen/run-native-folia-e2e.sh
 ```
 
-The projection harness refuses a jar-byte mismatch, requires Java 25, runs Gradle and client-bot tests, proves cancellation/drain plus same-position retry, compares artifacts from two clean worker processes, and writes a hash-linked `evidence-summary.json`.
+The projection harness refuses a jar-byte mismatch, requires Java 25, runs Gradle and client-bot tests, proves cancellation/drain plus same-position retry, compares artifacts from two clean worker processes, and writes a hash-linked `evidence-summary.json`. The native harness records the complete overlay, rebuilt Paperclip, harness, raw logs/JSON, exact Steel source/build identity, and summary hashes.
 
-The script writes logs and JSON beneath `artifacts/remote-worldgen-e2e/`. It deliberately enables the Bukkit post-processing divergence and must not be used as a production deployment recipe.
+The scripts write logs and JSON beneath `artifacts/remote-worldgen-e2e/` and `artifacts/native-folia-e2e/`. The projection run deliberately enables the Bukkit post-processing divergence and must not be used as a production deployment recipe.
 
 The worker enforces both global physical-work admission and a source-IP admission ceiling (`STEEL_WORLDGEN_MAX_IN_FLIGHT_PER_PEER`); cancellation retains both permits until detached physical work drains.
 

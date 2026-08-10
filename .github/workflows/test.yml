@@ -63,6 +63,28 @@ jobs:
           bash -n integration/remote-worldgen/run-mtls-smoke.sh
           bash -n integration/remote-worldgen/run-cross-language-test.sh
           bash -n integration/remote-worldgen/regenerate-golden.sh
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          assets = Path("steel-worldgen-service/test_assets")
+          artifact = assets / "noise-v1-overworld-seed-13579-x-6-z2.pb"
+          sidecar = artifact.with_suffix(artifact.suffix + ".sha256").read_text().strip()
+          manifest = json.loads((assets / "golden-manifest.json").read_text())
+          actual = hashlib.sha256(artifact.read_bytes()).hexdigest()
+          if actual != sidecar or actual != manifest["artifact_sha256"]:
+              raise RuntimeError("golden artifact hashes disagree")
+          if artifact.stat().st_size != manifest["artifact_bytes"]:
+              raise RuntimeError("golden artifact size disagrees with manifest")
+          if manifest["requested_build_id"] != manifest["build"]["external_build_id"]:
+              raise RuntimeError("golden build identities disagree")
+          if manifest["requested_build_id"] not in manifest["build"]["source_url"]:
+              raise RuntimeError("golden source URL does not identify its build")
+          for key in ("profile_sha256", "generator_sha256", "registry_sha256"):
+              if len(manifest[key]) != 64:
+                  raise RuntimeError(f"invalid {key}")
+              int(manifest[key], 16)
+          PY
           STEEL_WORLDGEN_BUILD_ID=ci-${GITHUB_SHA} \
           STEEL_WORLDGEN_SEED=13579 \
           STEEL_WORLDGEN_SOURCE_URL=https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA} \
@@ -124,3 +146,9 @@ jobs:
           cd /tmp/folia-26.2
           timeout 900s ./gradlew --no-daemon applyAllPatches
           timeout 900s ./gradlew --no-daemon :folia-server:compileJava
+          timeout 900s ./gradlew --no-daemon :folia-server:test --tests org.bukkit.support.suite.NormalTestSuite
+          test -f folia-server/build/test-results/test/TEST-io.papermc.paper.worldgen.steel.AsyncStatusCompletionGateTest.xml
+          test -f folia-server/build/test-results/test/TEST-io.papermc.paper.worldgen.steel.ImportCommitGateTest.xml
+          test -f folia-server/build/test-results/test/TEST-io.papermc.paper.worldgen.steel.ResponseEnvelopeTest.xml
+          timeout 900s ./gradlew --no-daemon :folia-server:test --tests org.bukkit.support.suite.VanillaFeatureTestSuite
+          test -f folia-server/build/test-results/test/TEST-io.papermc.paper.worldgen.steel.SteelNoiseArtifactTest.xml

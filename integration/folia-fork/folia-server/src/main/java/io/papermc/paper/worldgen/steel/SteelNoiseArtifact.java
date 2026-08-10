@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.TreeMap;
 import net.minecraft.commands.arguments.blocks.BlockStateParser;
 import net.minecraft.core.Registry;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
@@ -41,6 +42,16 @@ final class SteelNoiseArtifact {
 
     static ImportPlan prepare(
         final ServerLevel level,
+        final ProtoChunk center,
+        final ChunkArtifactV1 artifact,
+        final GenerateRequest request,
+        final Capabilities capabilities
+    ) {
+        return prepare(level.registryAccess(), center, artifact, request, capabilities);
+    }
+
+    static ImportPlan prepare(
+        final RegistryAccess registries,
         final ProtoChunk center,
         final ChunkArtifactV1 artifact,
         final GenerateRequest request,
@@ -72,8 +83,8 @@ final class SteelNoiseArtifact {
             "target chunk position mismatch"
         );
 
-        final BlockState[] blockStates = decodeBlockStates(level, artifact.getBlockStatesList());
-        final Identifier[] biomes = decodeBiomes(level, artifact.getBiomesList());
+        final BlockState[] blockStates = decodeBlockStates(registries, artifact.getBlockStatesList());
+        final Identifier[] biomes = decodeBiomes(registries, artifact.getBiomesList());
         final int sectionCount = artifact.getHeight() / 16;
         require(center.getSections().length == sectionCount, "target section count mismatch");
         require(artifact.getSectionsCount() == sectionCount, "artifact section count mismatch");
@@ -150,7 +161,7 @@ final class SteelNoiseArtifact {
     }
 
     private static BlockState[] decodeBlockStates(
-        final ServerLevel level,
+        final RegistryAccess registries,
         final List<dev.steelmc.worldgen.protocol.v1.BlockState> states
     ) {
         require(!states.isEmpty() && states.size() <= 65_536, "invalid block-state dictionary size");
@@ -183,7 +194,7 @@ final class SteelNoiseArtifact {
             final String description = serializeBlockState(state);
             final BlockStateParser.BlockResult parsed;
             try {
-                parsed = BlockStateParser.parseForBlock(level.registryAccess().lookupOrThrow(Registries.BLOCK), description, false);
+                parsed = BlockStateParser.parseForBlock(registries.lookupOrThrow(Registries.BLOCK), description, false);
             } catch (final CommandSyntaxException exception) {
                 throw new IllegalStateException("worker block state is absent from the Folia registry: " + description, exception);
             }
@@ -204,9 +215,9 @@ final class SteelNoiseArtifact {
         return result;
     }
 
-    private static Identifier[] decodeBiomes(final ServerLevel level, final List<String> names) {
+    private static Identifier[] decodeBiomes(final RegistryAccess registries, final List<String> names) {
         require(!names.isEmpty() && names.size() <= 4_096, "invalid biome dictionary size");
-        final Registry<Biome> registry = level.registryAccess().lookupOrThrow(Registries.BIOME);
+        final Registry<Biome> registry = registries.lookupOrThrow(Registries.BIOME);
         final Identifier[] result = new Identifier[names.size()];
         String previous = null;
         for (int index = 0; index < names.size(); index++) {

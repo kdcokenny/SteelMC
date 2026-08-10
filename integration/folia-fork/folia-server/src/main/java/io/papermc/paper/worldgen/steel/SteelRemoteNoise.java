@@ -85,6 +85,7 @@ public final class SteelRemoteNoise implements AutoCloseable {
     private final Capabilities capabilities;
     private final ThreadPoolExecutor importerExecutor;
     private final ConcurrentHashMap<ChunkKey, RequestContext> requests = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<ChunkKey, CancellationReservation> preAdmissionCancellations = new ConcurrentHashMap<>();
     private final ArrayDeque<RequestContext> admissionQueue = new ArrayDeque<>();
     private final int maxQueued;
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -204,11 +205,38 @@ public final class SteelRemoteNoise implements AutoCloseable {
         }
     }
 
-    /** Cooperatively cancels an admitted NOISE request and forwards the V1 Cancel RPC when already active. */
-    public static void cancel(final ServerLevel level, final int chunkX, final int chunkZ) {
+    /**
+     * Cooperatively cancels an admitted NOISE request and forwards the V1 Cancel RPC when already active.
+     *
+     * @return whether cancellation won, the request was already terminal, or it was not admitted yet
+     */
+    public static CancellationResult cancel(final ServerLevel level, final int chunkX, final int chunkZ) {
         final SteelRemoteNoise instance = INSTANCE.get();
-        if (instance != null) {
-            instance.cancelRequest(new ChunkKey(level, chunkX, chunkZ));
+        return instance == null
+            ? CancellationResult.NOT_FOUND
+            : instance.cancelRequest(new ChunkKey(level, chunkX, chunkZ));
+    }
+
+    public enum CancellationResult {
+        CANCELLED,
+        TERMINAL,
+        NOT_FOUND,
+    }
+
+    /** Reserves cancellation across the gap before a running status admits its request context. */
+    public static CancellationReservation reserveCancellationBeforeAdmission(
+        final ServerLevel level,
+        final int chunkX,
+        final int chunkZ
+    ) {
+        final SteelRemoteNoise instance = INSTANCE.get();
+        return instance == null ? null : instance.reserveCancellation(new ChunkKey(level, chunkX, chunkZ));
+    }
+
+    /** Clears an unused pre-admission reservation when the local status task was cancelled before it ran. */
+    public static void clearCancellationBeforeAdmission(final CancellationReservation reservation) {
+        if (reservation != null) {
+            reservation.owner.preAdmissionCancellations.remove(reservation.key, reservation);
         }
     }
 
@@ -280,10 +308,46 @@ public final class SteelRemoteNoise implements AutoCloseable {
             request,
             canonicalRequestSha256(request)
         );
+        if (this.consumePreAdmissionCancellation(context)) {
+            return context.result;
+        }
         final RequestContext collision = this.requests.putIfAbsent(context.key, context);
         SteelNoiseArtifact.require(collision == null, "duplicate Steel remote NOISE request for one chunk");
+        if (this.consumePreAdmissionCancellation(context)) {
+            return context.result;
+        }
         this.admit(context);
         return context.result;
+    }
+
+    private CancellationReservation reserveCancellation(final ChunkKey key) {
+        final CancellationReservation created = new CancellationReservation(this, key);
+        final CancellationReservation existing = this.preAdmissionCancellations.putIfAbsent(key, created);
+        if (existing != null) {
+            return existing;
+        }
+        final RequestContext context = this.requests.get(key);
+        if (context != null && this.preAdmissionCancellations.remove(key, created)) {
+            created.result = switch (this.cancelRequest(key)) {
+                case CANCELLED -> CancellationReservationResult.CANCELLED;
+                case TERMINAL -> CancellationReservationResult.TERMINAL;
+                case NOT_FOUND -> CancellationReservationResult.NOT_FOUND;
+            };
+        } else {
+            created.result = CancellationReservationResult.NOT_FOUND;
+        }
+        return created;
+    }
+
+    private boolean consumePreAdmissionCancellation(final RequestContext context) {
+        final CancellationReservation reservation = this.preAdmissionCancellations.remove(context.key);
+        if (reservation == null) {
+            return false;
+        }
+        context.commitGate.tryCancel(() -> false);
+        context.result.completeExceptionally(new CancellationException("Steel remote NOISE request was cancelled before admission"));
+        this.finish(context);
+        return true;
     }
 
     private void admit(final RequestContext context) {
@@ -312,7 +376,7 @@ public final class SteelRemoteNoise implements AutoCloseable {
     }
 
     private void startRequest(final RequestContext context) {
-        if (context.cancelled.get() || this.closed.get()) {
+        if (context.commitGate.isCancelled() || this.closed.get()) {
             context.result.completeExceptionally(new CancellationException("Steel remote NOISE request was cancelled before dispatch"));
             this.finish(context);
             return;
@@ -324,19 +388,19 @@ public final class SteelRemoteNoise implements AutoCloseable {
                 .withDeadlineAfter(this.deadlineMillis, TimeUnit.MILLISECONDS)
                 .generate(context.request);
             context.call = call;
-            if (context.cancelled.get()) {
+            if (context.commitGate.isCancelled()) {
                 call.cancel(true);
                 this.sendCancel(context);
             }
         } catch (final RuntimeException exception) {
-            context.result.completeExceptionally(exception);
+            context.result.completeExceptionally(context.failure(exception));
             this.finish(context);
             return;
         }
         Futures.addCallback(call, new FutureCallback<>() {
             @Override
             public void onSuccess(final GenerateResponse response) {
-                if (context.cancelled.get()) {
+                if (context.commitGate.isCancelled()) {
                     context.result.completeExceptionally(new CancellationException("Steel remote NOISE request was cancelled"));
                     SteelRemoteNoise.this.finish(context);
                     return;
@@ -344,14 +408,14 @@ public final class SteelRemoteNoise implements AutoCloseable {
                 try {
                     SteelRemoteNoise.this.importerExecutor.execute(() -> SteelRemoteNoise.this.decodeAndCommit(context, response));
                 } catch (final RejectedExecutionException exception) {
-                    context.result.completeExceptionally(exception);
+                    context.result.completeExceptionally(context.failure(exception));
                     SteelRemoteNoise.this.finish(context);
                 }
             }
 
             @Override
             public void onFailure(final Throwable throwable) {
-                context.result.completeExceptionally(throwable);
+                context.result.completeExceptionally(context.failure(throwable));
                 SteelRemoteNoise.this.finish(context);
             }
         }, MoreExecutors.directExecutor());
@@ -359,9 +423,12 @@ public final class SteelRemoteNoise implements AutoCloseable {
 
     private void decodeAndCommit(final RequestContext context, final GenerateResponse response) {
         try {
-            validateResponse(response, context);
-            final byte[] bytes = response.getArtifact().toByteArray();
-            final ChunkArtifactV1 artifact = ChunkArtifactV1.parseFrom(bytes);
+            final ChunkArtifactV1 artifact = validateAndParseResponse(
+                response,
+                context.request,
+                context.canonicalRequestSha256,
+                this.capabilities
+            );
             final SteelNoiseArtifact.ImportPlan plan = SteelNoiseArtifact.prepare(
                 context.key.level,
                 context.center,
@@ -369,20 +436,20 @@ public final class SteelRemoteNoise implements AutoCloseable {
                 context.request,
                 this.capabilities
             );
-            synchronized (context) {
-                if (context.cancelled.get()) {
-                    throw new CancellationException("Steel remote NOISE request was cancelled before commit");
-                }
-                context.result.complete(plan.commit());
-            }
+            context.result.complete(context.commitGate.commit(plan::commit));
         } catch (final Throwable throwable) {
-            context.result.completeExceptionally(throwable);
+            context.result.completeExceptionally(context.failure(throwable));
         } finally {
             this.finish(context);
         }
     }
 
-    private void validateResponse(final GenerateResponse response, final RequestContext context) {
+    static ChunkArtifactV1 validateAndParseResponse(
+        final GenerateResponse response,
+        final GenerateRequest request,
+        final byte[] canonicalRequestSha256,
+        final Capabilities capabilities
+    ) throws com.google.protobuf.InvalidProtocolBufferException {
         SteelNoiseArtifact.require(response.getArtifact().size() <= MAX_ARTIFACT_BYTES, "artifact exceeds client size limit");
         SteelNoiseArtifact.require(
             response.getUncompressedSize() <= MAX_ARTIFACT_BYTES
@@ -393,17 +460,17 @@ public final class SteelRemoteNoise implements AutoCloseable {
             MessageDigest.isEqual(sha256(response.getArtifact().toByteArray()), response.getArtifactSha256().toByteArray()),
             "artifact SHA-256 mismatch"
         );
-        SteelNoiseArtifact.require(response.getRequestId().equals(context.request.getRequestId()), "response request id mismatch");
+        SteelNoiseArtifact.require(response.getRequestId().equals(request.getRequestId()), "response request id mismatch");
         SteelNoiseArtifact.require(
-            MessageDigest.isEqual(context.canonicalRequestSha256, response.getCanonicalRequestSha256().toByteArray()),
+            MessageDigest.isEqual(canonicalRequestSha256, response.getCanonicalRequestSha256().toByteArray()),
             "response canonical request digest mismatch"
         );
         SteelNoiseArtifact.require(
-            response.getGeneratorSha256().equals(this.capabilities.getGeneratorSha256()),
+            response.getGeneratorSha256().equals(capabilities.getGeneratorSha256()),
             "response generator fingerprint mismatch"
         );
         SteelNoiseArtifact.require(
-            response.getRegistrySha256().equals(this.capabilities.getRegistrySha256()),
+            response.getRegistrySha256().equals(capabilities.getRegistrySha256()),
             "response registry fingerprint mismatch"
         );
         SteelNoiseArtifact.require(response.getArtifactVersion() == 1, "response artifact version mismatch");
@@ -411,17 +478,17 @@ public final class SteelRemoteNoise implements AutoCloseable {
             response.getCompression() == Compression.COMPRESSION_NONE,
             "worker returned unsupported application compression"
         );
+        return ChunkArtifactV1.parseFrom(response.getArtifact());
     }
 
-    private void cancelRequest(final ChunkKey key) {
+    private CancellationResult cancelRequest(final ChunkKey key) {
         final RequestContext context = this.requests.get(key);
         if (context == null) {
-            return;
+            return CancellationResult.NOT_FOUND;
         }
-        synchronized (context) {
-            if (context.result.isDone() || !context.cancelled.compareAndSet(false, true)) {
-                return;
-            }
+        final CancellationResult result = context.commitGate.tryCancel(context.result::isDone);
+        if (result == CancellationResult.TERMINAL) {
+            return result;
         }
 
         boolean removedQueued = false;
@@ -434,13 +501,14 @@ public final class SteelRemoteNoise implements AutoCloseable {
         if (removedQueued) {
             context.result.completeExceptionally(new CancellationException("queued Steel remote NOISE request was cancelled"));
             this.finish(context);
-            return;
+            return CancellationResult.CANCELLED;
         }
         final ListenableFuture<GenerateResponse> call = context.call;
         if (call != null) {
             call.cancel(true);
             this.sendCancel(context);
         }
+        return CancellationResult.CANCELLED;
     }
 
     private void sendCancel(final RequestContext context) {
@@ -484,7 +552,7 @@ public final class SteelRemoteNoise implements AutoCloseable {
             while (!this.admissionQueue.isEmpty()) {
                 final RequestContext candidate = this.admissionQueue.removeFirst();
                 candidate.queued = false;
-                if (!candidate.cancelled.get()) {
+                if (!candidate.commitGate.isCancelled()) {
                     candidate.activeSlot = true;
                     next = candidate;
                     break;
@@ -758,6 +826,7 @@ public final class SteelRemoteNoise implements AutoCloseable {
         for (final RequestContext context : List.copyOf(this.requests.values())) {
             this.cancelRequest(context.key);
         }
+        this.preAdmissionCancellations.clear();
         this.importerExecutor.shutdownNow();
         this.channel.shutdown();
         final io.grpc.netty.shaded.io.netty.util.concurrent.Future<?> eventLoopTermination =
@@ -775,13 +844,64 @@ public final class SteelRemoteNoise implements AutoCloseable {
         }
     }
 
+    public enum CancellationReservationResult {
+        PENDING,
+        CANCELLED,
+        TERMINAL,
+        NOT_FOUND,
+    }
+
+    public static final class CancellationReservation {
+        private final SteelRemoteNoise owner;
+        private final ChunkKey key;
+        private volatile CancellationReservationResult result = CancellationReservationResult.PENDING;
+
+        private CancellationReservation(final SteelRemoteNoise owner, final ChunkKey key) {
+            this.owner = owner;
+            this.key = key;
+        }
+
+        public CancellationReservationResult result() {
+            return this.result;
+        }
+    }
+
+    static final class ImportCommitGate {
+        private boolean cancelled;
+        private boolean committed;
+
+        synchronized boolean isCancelled() {
+            return this.cancelled;
+        }
+
+        synchronized CancellationResult tryCancel(final java.util.function.BooleanSupplier terminal) {
+            if (this.committed || terminal.getAsBoolean()) {
+                return CancellationResult.TERMINAL;
+            }
+            this.cancelled = true;
+            return CancellationResult.CANCELLED;
+        }
+
+        synchronized <T> T commit(final java.util.function.Supplier<T> action) {
+            if (this.cancelled) {
+                throw new CancellationException("Steel remote NOISE request was cancelled before commit");
+            }
+            if (this.committed) {
+                throw new IllegalStateException("Steel remote NOISE import was already committed");
+            }
+            final T result = action.get();
+            this.committed = true;
+            return result;
+        }
+    }
+
     private static final class RequestContext {
         private final ChunkKey key;
         private final ProtoChunk center;
         private final GenerateRequest request;
         private final byte[] canonicalRequestSha256;
         private final CompletableFuture<ChunkAccess> result = new CompletableFuture<>();
-        private final AtomicBoolean cancelled = new AtomicBoolean();
+        private final ImportCommitGate commitGate = new ImportCommitGate();
         private final AtomicBoolean cancelSent = new AtomicBoolean();
         private final AtomicBoolean finished = new AtomicBoolean();
         private volatile ListenableFuture<GenerateResponse> call;
@@ -798,6 +918,15 @@ public final class SteelRemoteNoise implements AutoCloseable {
             this.center = center;
             this.request = request;
             this.canonicalRequestSha256 = canonicalRequestSha256;
+        }
+
+        private Throwable failure(final Throwable throwable) {
+            if (!this.commitGate.isCancelled() || throwable instanceof CancellationException) {
+                return throwable;
+            }
+            final CancellationException cancellation = new CancellationException("Steel remote NOISE request was cancelled");
+            cancellation.initCause(throwable);
+            return cancellation;
         }
     }
 
