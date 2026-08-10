@@ -59,6 +59,7 @@ jobs:
         shell: bash
         run: |
           bash -n integration/remote-worldgen/run-e2e.sh
+          bash -n integration/remote-worldgen/run-native-folia-e2e.sh
           bash -n integration/remote-worldgen/run-mtls-smoke.sh
           bash -n integration/remote-worldgen/run-cross-language-test.sh
           bash -n integration/remote-worldgen/regenerate-golden.sh

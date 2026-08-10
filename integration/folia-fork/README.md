@@ -16,17 +16,20 @@ cd /tmp/folia-26.2
 The fork owns the native hook. The Bukkit plugin under `../folia-plugin`
 is only a projection/E2E prototype and is not loaded by this importer.
 
-## Runtime readiness
+## Runtime evidence
 
-Keep this importer disabled outside diagnostics. A plugin-free fresh-world run at
-seed `13579` successfully imported the spawn area, then failed closed during a
-protocol-776 teleport when Steel and Folia disagreed on completed BIOMES data at
-chunks `(31,2)`/`(32,2)` (`stony_shore` versus `lush_caves`). This exposes an
-underlying 26.2 climate/density parity blocker. Ignoring the mismatch or replacing
-Folia's prerequisite BIOMES would violate the import contract. The architecture
-must first choose and prove either bit-compatible Steel biome generation or an
-explicit canonical Folia BIOMES-context transfer. There is no successful native
-persistence/restart claim yet.
+A plugin-free fresh-world diagnostic initially found a fail-closed BIOMES mismatch
+at chunks `(31,2)`/`(32,2)`. The root cause was Steel using double multiplication
+where Folia 26.2's compiled random sources use float multiplication before widening
+`nextDouble`. After correcting all three matching Steel RNG paths, the native harness
+completed 1,260 exploration-window imports with no worker failures, delivered all
+five protocol-776 client phases, shut down cleanly, and rejoined the persisted world
+with this importer disabled and no additional worker calls.
+
+Run `../remote-worldgen/run-native-folia-e2e.sh` against a Paperclip built from this
+checkout to reproduce the matrix. This evidence covers the exercised fresh profile,
+not arbitrary structure context. Production use remains blocked on explicit
+structure/Beardifier identity and Moonrise priority-update transfer.
 
 ## Scope and failure policy
 
@@ -45,8 +48,7 @@ registry SHA are pinned. `/paper reload` does not replace the client.
 
 The current V1 protobuf has no priority field/update RPC and no Folia
 structure/Beardifier context identity. Consequently this importer is limited
-to the explicit fresh vanilla noise-generator profile, but it is not runtime-ready
-until the BIOMES parity blocker above is resolved. It also does not claim the
+to the explicit fresh vanilla noise-generator profile. It does not claim the
 architecture's priority transfer or arbitrary structure-context support. Those
 require a protobuf and Rust dispatcher extension.
 

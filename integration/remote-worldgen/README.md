@@ -2,7 +2,8 @@
 
 - `compose.yml`: pinned, non-root, read-only worker on an internal Docker network. Set an immutable `STEEL_WORLDGEN_BUILD_ID` and exact seed.
 - `kubernetes.yaml`: four-replica, one-generation-thread-per-process mTLS/resource/security/network-policy template; replace the image digest and provide the named secrets. Kubernetes `Service` routing is not content-aware; place a canonical-hash-aware authenticated gateway in front if cross-replica cache locality matters.
-- `run-e2e.sh`: cold local Folia/plugin/worker/Azalea test plus cancellation/retry and two-process determinism proof.
+- `run-e2e.sh`: cold published-Folia/Bukkit-projection/worker/Azalea test plus cancellation/retry and two-process determinism proof.
+- `run-native-folia-e2e.sh`: plugin-free patched-Folia native import, protocol-776 exploration, graceful save, disabled-importer restart, and rejoin proof.
 - `run-mtls-smoke.sh`: ephemeral-CA direct-mTLS health/generation acceptance and missing-client-certificate rejection proof.
 - `run-cross-language-test.sh`: generates with the current Rust tree and makes Java decode, validate, and apply those exact bytes; it requires only immutable build/source metadata.
 - `run-e2e.sh` additionally requires the pinned Folia 26.2 build-1 paperclip and `ACCEPT_MINECRAFT_EULA=true`.
@@ -23,9 +24,18 @@ ACCEPT_MINECRAFT_EULA=true \
 ./integration/remote-worldgen/run-e2e.sh
 ```
 
-Apply and compile the experimental internal Folia importer separately using [`../folia-fork/README.md`](../folia-fork/README.md); the Bukkit projection E2E uses the published Folia JAR and is not native-importer evidence. A plugin-free diagnostic currently fails closed on a Steel/Folia BIOMES parity mismatch, so keep the importer disabled until that documented foundation is resolved.
+Apply and compile the experimental internal Folia importer separately using [`../folia-fork/README.md`](../folia-fork/README.md); the Bukkit projection E2E uses the published Folia JAR and is not native-importer evidence. The separate native harness takes the pinned patched source checkout and its locally built Paperclip:
 
-The harness refuses a jar-byte mismatch, requires Java 25, runs Gradle and client-bot tests, proves cancellation/drain plus same-position retry, compares artifacts from two clean worker processes, and writes a hash-linked `evidence-summary.json`.
+```bash
+FOLIA_SOURCE_DIR=/tmp/folia-26.2 \
+FOLIA_NATIVE_JAR=/tmp/folia-26.2/folia-server/build/libs/folia-paperclip-26.2.local-SNAPSHOT.jar \
+STEEL_WORLDGEN_BUILD_ID="$(git rev-parse HEAD)" \
+STEEL_WORLDGEN_SOURCE_URL="https://github.com/Steel-Foundation/SteelMC/tree/$(git rev-parse HEAD)" \
+ACCEPT_MINECRAFT_EULA=true \
+./integration/remote-worldgen/run-native-folia-e2e.sh
+```
+
+The projection harness refuses a jar-byte mismatch, requires Java 25, runs Gradle and client-bot tests, proves cancellation/drain plus same-position retry, compares artifacts from two clean worker processes, and writes a hash-linked `evidence-summary.json`.
 
 The script writes logs and JSON beneath `artifacts/remote-worldgen-e2e/`. It deliberately enables the Bukkit post-processing divergence and must not be used as a production deployment recipe.
 

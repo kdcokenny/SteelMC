@@ -2,7 +2,7 @@
 
 ## Status
 
-This branch implements a version-pinned Steel worker, cross-language artifact, deliberately limited Bukkit projection prototype, protocol-776 client harness, and an experimental internal Moonrise/Folia importer for the explicit fresh vanilla-noise V1 profile. The maintained patch queue applies and compiles at the pinned Folia revision. Keep the importer disabled: a plugin-free runtime diagnostic found an underlying Steel/Folia BIOMES parity mismatch, described below. The Bukkit evidence is not proof of faithful native NOISE import, and V1 still lacks remote priority updates and explicit Folia structure/Beardifier context identity.
+This branch implements a version-pinned Steel worker, cross-language artifact, deliberately limited Bukkit projection prototype, protocol-776 client harness, and an experimental internal Moonrise/Folia importer for the explicit fresh vanilla-noise V1 profile. The maintained patch queue applies and compiles at the pinned Folia revision. A plugin-free runtime run now proves native import, exploration, shutdown, persistence, and restart after correcting the underlying Steel/Folia random-double precision mismatch. V1 still lacks remote priority updates and explicit Folia structure/Beardifier context identity, so this is not a broad production-readiness claim.
 
 Exact source pins used by the checked-in evidence:
 
@@ -36,11 +36,13 @@ The plugin under `integration/folia-plugin` configures a synchronous `ChunkGener
 
 Do not configure its remote `BiomeProvider` for the prototype world. Folia's structure biome searches call the provider outside a center NOISE request and would turn biome lookups into unnecessary NOISE artifacts. The tested prototype keeps Folia's native 26.2 biome provider and uses Steel only for the block projection. Exact fingerprints and seed make divergence detectable, but this is still not the production context contract.
 
-## Native importer runtime blocker
+## Native importer runtime evidence and remaining boundary
 
-A plugin-free diagnostic used a locally built patched Folia JAR at source pin `57f643f10e0a9d01024773232d38ae666067d593`, a fresh seed-`13579` world, and the pinned protocol-776 Azalea client. Startup and the first 25 remote NOISE requests succeeded. After teleporting to `(512, 128, 0)`, the importer correctly failed closed at chunks `(31,2)`/`(32,2)` because Steel's artifact BIOMES did not match Folia's already-completed BIOMES stage. One observed quart cell was Steel `minecraft:stony_shore` versus Folia `minecraft:lush_caves`; another was the reverse. Folia's sampled climate target also differed from Steel's at the quantized depth/continentalness boundary.
+The first plugin-free diagnostic used a locally built patched Folia JAR at source pin `57f643f10e0a9d01024773232d38ae666067d593`, a fresh seed-`13579` world, and the pinned protocol-776 Azalea client. It correctly failed closed at chunks `(31,2)`/`(32,2)` because Steel and Folia chose `stony_shore` versus `lush_caves` at quantized climate boundaries. Bytecode inspection isolated the first divergence to Folia 26.2's `XoroshiroRandomSource.nextDouble`: it performs `l2f`, float multiplication, then `f2d`, while Steel had multiplied in double precision. The corresponding Xoroshiro, legacy, and worldgen RNG paths now match Folia 26.2, and two end-to-end climate target vectors prevent regression.
 
-This is a generator-parity foundation blocker, not permission to ignore the precondition or overwrite Folia's BIOMES. The internal importer must remain disabled until the architecture chooses and proves either bit-compatible Steel 26.2 climate/density generation or an explicit canonical Folia BIOMES-context transfer. Structure/Beardifier context and remote priority transfer remain separate V1 gaps. No plugin-free persisted native-importer success is claimed.
+With that foundation corrected, a cold plugin-free rerun completed 1,260 exploration-window worker requests with zero failure/cancellation, delivered 585 chunk events across five client phases (`117/117/117/117/117`), shut down cleanly, and successfully rejoined the persisted world with the importer disabled and no additional worker traffic. The reproducible harness is `run-native-folia-e2e.sh`; it requires an explicitly accepted EULA and a Paperclip built from the pinned patched checkout.
+
+This proves the implemented fresh-profile path over the exercised grid. It does not supply or identify Folia structure starts/references for Beardifier, and it does not propagate Moonrise priority changes after admission. Keep broader production deployment blocked on those protocol extensions and structure-adjacent parity tests; do not interpret the successful grid as arbitrary structure-context coverage.
 
 ## Native Folia overlay requirements
 
