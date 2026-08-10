@@ -282,7 +282,7 @@ fn set_block_matches_vanilla_update_limit_and_client_publication_gates() {
     init_vanilla_registry();
     init_behaviors();
 
-    let world = Arc::clone(test_world());
+    let world = fresh_test_world("set_block_client_publication_gates");
     let pos = BlockPos::new(1_504, 64, 1_504);
     let chunk_pos = ChunkPos::from_block_pos(pos);
     let simulation_ticket = ChunkTicket::simulated_full_chunks(1);
