@@ -106,7 +106,9 @@ java_path=$(command -v "$JAVA_BIN")
 export JAVA_HOME
 JAVA_HOME=$(dirname "$(dirname "$(readlink -f "$java_path")")")
 /usr/bin/timeout 1200s "$FOLIA_BUILD_DIR/gradlew" -p "$FOLIA_BUILD_DIR" \
-  applyAllPatches :folia-server:createPaperclipJar --no-daemon --no-configuration-cache
+  applyAllPatches --no-daemon --no-configuration-cache
+/usr/bin/timeout 1200s "$FOLIA_BUILD_DIR/gradlew" -p "$FOLIA_BUILD_DIR" \
+  :folia-server:createPaperclipJar --no-daemon --no-configuration-cache
 mapfile -t paperclips < <(find "$FOLIA_BUILD_DIR/folia-server/build/libs" -maxdepth 1 -type f -name 'folia-paperclip-*.jar' -print)
 [[ "${#paperclips[@]}" == 1 ]] || { printf 'Paperclip build produced %s candidate outputs\n' "${#paperclips[@]}" >&2; exit 2; }
 FOLIA_NATIVE_JAR=${paperclips[0]}
