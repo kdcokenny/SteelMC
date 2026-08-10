@@ -363,6 +363,10 @@ stderr:
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "table-driven subprocess cases keep environment isolation checks together"
+    )]
     fn from_env_enforces_resource_and_string_bounds() {
         for (name, values) in [
             (
