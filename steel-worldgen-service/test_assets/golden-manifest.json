@@ -1,24 +1,24 @@
 {
   "artifact_bytes": 4428,
-  "artifact_sha256": "fdbd5468312a75a23aad49f9e1319c0e4dac6ab9974728517de6b631b30f2e72",
+  "artifact_sha256": "487bf15809a35fde35544b4027d35079a51245ce1c477403a45ef8bb32099107",
   "build": {
     "cargo_id": "cargo 1.99.0-nightly (3efb1f477 2026-07-17) | release: 1.99.0-nightly | commit-hash: 3efb1f477e99b42974b982d939fd100303cdf7db | commit-date: 2026-07-17 | host: x86_64-unknown-linux-gnu | libgit2: 1.9.4 (sys:0.21.0 vendored) | libcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:OpenSSL/3.6.3) | ssl: OpenSSL 3.6.3 9 Jun 2026 | os: Ubuntu 26.4.0 (resolute) [64-bit]",
     "configuration": "profile=release;opt=3;debug=false;debug_assertions=false;overflow_checks=true;ub_checks=true;panic=unwind;relocation=pic;target_features=fxsr,sse,sse2,x87;rustflags=-Clink-arg=-fuse-ld=lld | -Zthreads=0",
-    "external_build_id": "2bfbb56899a995c16337557fc7dbc03b58246d7a",
+    "external_build_id": "6b71e518dd7a6c526b0dc73cca3b090d9aca87dc",
     "license": "AGPL-3.0-or-later",
     "rustc_id": "rustc 1.99.0-nightly (6f72b5dd5 2026-07-22) | binary: rustc | commit-hash: 6f72b5dd5f82226a2773d40efea7bab941892a73 | commit-date: 2026-07-22 | host: x86_64-unknown-linux-gnu | release: 1.99.0-nightly | LLVM version: 22.1.8",
     "source_sha256": "20817f4600feed3e01b78f8ad399ea945bef97def16cc86fbbb972fd97e4232f",
-    "source_url": "https://github.com/Steel-Foundation/SteelMC/tree/2bfbb56899a995c16337557fc7dbc03b58246d7a",
+    "source_url": "https://github.com/kdcokenny/SteelMC/tree/6b71e518dd7a6c526b0dc73cca3b090d9aca87dc",
     "target": "x86_64-unknown-linux-gnu"
   },
   "chunk": [
     -6,
     2
   ],
-  "generator_sha256": "35336f5824d457dbb4b37abf001665169a643b57cf86bc80ff22f7769310d59c",
-  "profile_sha256": "d127ff1754c274d75245c732b6f5eea6cb1baa55164405aca0a0821b5b35ecd7",
+  "generator_sha256": "3b56d55dbded2f4c35ae21d36c29defcb808ea758aaaefe5e148331013efe68d",
+  "profile_sha256": "efd30ff2d661db7286aa7caf5e26756321b674cd129d5fb17693320f2091353e",
   "registry_sha256": "2c6bc18babbf7b365e611b7547a6bef7123e42696b8bee29c06300f530698d26",
-  "requested_build_id": "2bfbb56899a995c16337557fc7dbc03b58246d7a",
+  "requested_build_id": "6b71e518dd7a6c526b0dc73cca3b090d9aca87dc",
   "schema": "steel-worldgen-golden-v1",
   "seed": 13579
 }
