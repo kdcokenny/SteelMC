@@ -108,7 +108,11 @@ final class SteelNoiseArtifact {
                 final int z = (index >>> 2) & 3;
                 final int y = index >>> 4;
                 final Identifier expected = biomes[biomePalette.getEntries(PaletteCodec.unpack(biomePalette, index))];
-                require(source.getNoiseBiome(x, y, z).is(expected), "artifact biome differs from the completed BIOMES stage");
+                require(
+                    source.getNoiseBiome(x, y, z).is(expected),
+                    "artifact biome " + expected + " differs from completed BIOMES " + source.getNoiseBiome(x, y, z)
+                        + " at section " + sectionIndex + " quart " + x + "," + y + "," + z
+                );
             }
 
             final LevelChunkSection prepared = source.copy();

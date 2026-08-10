@@ -2,7 +2,7 @@
 
 ## Status
 
-This branch implements a version-pinned Steel worker, cross-language artifact, deliberately limited Bukkit projection prototype, protocol-776 client harness, and a maintained internal Moonrise/Folia importer for the explicit fresh vanilla-noise V1 profile. The maintained patch queue applies and compiles at the pinned Folia revision, but the internal importer has not yet completed the plugin-free persisted runtime E2E matrix. The older Bukkit evidence is not proof of faithful native NOISE import, and V1 still lacks remote priority updates and explicit Folia structure/Beardifier context identity.
+This branch implements a version-pinned Steel worker, cross-language artifact, deliberately limited Bukkit projection prototype, protocol-776 client harness, and an experimental internal Moonrise/Folia importer for the explicit fresh vanilla-noise V1 profile. The maintained patch queue applies and compiles at the pinned Folia revision. Keep the importer disabled: a plugin-free runtime diagnostic found an underlying Steel/Folia BIOMES parity mismatch, described below. The Bukkit evidence is not proof of faithful native NOISE import, and V1 still lacks remote priority updates and explicit Folia structure/Beardifier context identity.
 
 Exact source pins used by the checked-in evidence:
 
@@ -36,7 +36,13 @@ The plugin under `integration/folia-plugin` configures a synchronous `ChunkGener
 
 Do not configure its remote `BiomeProvider` for the prototype world. Folia's structure biome searches call the provider outside a center NOISE request and would turn biome lookups into unnecessary NOISE artifacts. The tested prototype keeps Folia's native 26.2 biome provider and uses Steel only for the block projection. Exact fingerprints and seed make divergence detectable, but this is still not the production context contract.
 
-## Required production Folia fork
+## Native importer runtime blocker
+
+A plugin-free diagnostic used a locally built patched Folia JAR at source pin `57f643f10e0a9d01024773232d38ae666067d593`, a fresh seed-`13579` world, and the pinned protocol-776 Azalea client. Startup and the first 25 remote NOISE requests succeeded. After teleporting to `(512, 128, 0)`, the importer correctly failed closed at chunks `(31,2)`/`(32,2)` because Steel's artifact BIOMES did not match Folia's already-completed BIOMES stage. One observed quart cell was Steel `minecraft:stony_shore` versus Folia `minecraft:lush_caves`; another was the reverse. Folia's sampled climate target also differed from Steel's at the quantized depth/continentalness boundary.
+
+This is a generator-parity foundation blocker, not permission to ignore the precondition or overwrite Folia's BIOMES. The internal importer must remain disabled until the architecture chooses and proves either bit-compatible Steel 26.2 climate/density generation or an explicit canonical Folia BIOMES-context transfer. Structure/Beardifier context and remote priority transfer remain separate V1 gaps. No plugin-free persisted native-importer success is claimed.
+
+## Native Folia overlay requirements
 
 The active 26.2 scheduler is Moonrise, not obsolete vanilla `ChunkMap` methods. The hook belongs at:
 
@@ -57,7 +63,7 @@ The fork must:
 8. Define an explicit retry/fail-local/fail-world policy. Current Moonrise sends non-cancellation generation exceptions to `unrecoverableChunkSystemFailure`; silently substituting local generation after partial remote acceptance is unsafe.
 9. Reject blending and retrogen until their complete input and mutation semantics are implemented.
 
-A source-level scheduler prerequisite is provided in `integration/folia-fork/`. It applies cleanly to the pinned head and `:folia-server:compileJava` passed under Java 25. It proves non-blocking status continuations only; it is not the missing internal Steel importer.
+The complete experimental importer overlay is provided in `integration/folia-fork/`. Its scheduler and configuration patches plus ordinary Java importer sources apply cleanly to the pinned head, and `:folia-server:compileJava` passes under Java 25. Compilation proves API compatibility, not runtime world-generation parity.
 
 The old `ChunkMap.scheduleChunkLoad`, `GenerationChunkHolder.applyStep`, and similar vanilla paths throw `UnsupportedOperationException` in current Folia and are not integration points. Velocity has no chunk-generation lifecycle and is also not an integration point.
 
@@ -103,7 +109,7 @@ cargo fmt --all --check
 (cd integration/client-bot && cargo check --locked)
 ```
 
-The executable E2E harness is `integration/remote-worldgen/run-e2e.sh`. It requires a locally built exact-head Folia jar and explicit EULA acceptance. It creates a cold world, starts the worker and plugin, joins with pinned Azalea, waits through keepalives, teleports across four 512-block-separated views, verifies chunk receipt in every phase, and rejects Moonrise chunk-system errors.
+The executable projection E2E harness is `integration/remote-worldgen/run-e2e.sh`. It requires the exact published Folia 26.2 build-1 JAR pinned by SHA-256 and explicit EULA acceptance. It creates a cold world, starts the worker and Bukkit plugin, joins with pinned Azalea, waits through keepalives, teleports across four 512-block-separated views, verifies chunk receipt in every phase, and rejects Moonrise chunk-system errors. It does not load the internal importer.
 
 Historical, superseded loopback observations are archived in `integration/remote-worldgen/results/`; they predate the current internal importer and final source identity:
 

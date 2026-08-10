@@ -18,6 +18,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
       - run: cargo test --locked --verbose
+      - name: Enforce Cargo license policy
+        env:
+          RUSTFLAGS: ""
+        run: |
+          cargo install --locked cargo-deny --version 0.20.2
+          cargo deny --config audit.toml check licenses
 
 
   remote-worldgen-integration:

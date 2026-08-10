@@ -13,8 +13,20 @@ cd /tmp/folia-26.2
 ./gradlew :folia-server:compileJava --no-daemon --no-configuration-cache
 ```
 
-The fork owns the production hook. The Bukkit plugin under `../folia-plugin`
+The fork owns the native hook. The Bukkit plugin under `../folia-plugin`
 is only a projection/E2E prototype and is not loaded by this importer.
+
+## Runtime readiness
+
+Keep this importer disabled outside diagnostics. A plugin-free fresh-world run at
+seed `13579` successfully imported the spawn area, then failed closed during a
+protocol-776 teleport when Steel and Folia disagreed on completed BIOMES data at
+chunks `(31,2)`/`(32,2)` (`stony_shore` versus `lush_caves`). This exposes an
+underlying 26.2 climate/density parity blocker. Ignoring the mismatch or replacing
+Folia's prerequisite BIOMES would violate the import contract. The architecture
+must first choose and prove either bit-compatible Steel biome generation or an
+explicit canonical Folia BIOMES-context transfer. There is no successful native
+persistence/restart claim yet.
 
 ## Scope and failure policy
 
@@ -32,10 +44,11 @@ seed/range/dimension, worker profile SHA, and the full local block-state/biome
 registry SHA are pinned. `/paper reload` does not replace the client.
 
 The current V1 protobuf has no priority field/update RPC and no Folia
-structure/Beardifier context identity. Consequently this importer is faithful
-to the explicit fresh vanilla noise-generator profile, but it does not claim
-the architecture's priority transfer or arbitrary structure-context support.
-Those require a protobuf and Rust dispatcher extension.
+structure/Beardifier context identity. Consequently this importer is limited
+to the explicit fresh vanilla noise-generator profile, but it is not runtime-ready
+until the BIOMES parity blocker above is resolved. It also does not claim the
+architecture's priority transfer or arbitrary structure-context support. Those
+require a protobuf and Rust dispatcher extension.
 
 ## Configuration
 

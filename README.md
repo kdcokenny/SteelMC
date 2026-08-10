@@ -56,7 +56,7 @@ reproduction instructions are available on the
 
 ### Experimental remote world generation
 
-This source tree also contains a version-pinned fixed-profile remote NOISE worker, a Bukkit projection plugin, a maintained internal Folia fresh-profile importer, a protocol-776 exploration bot, and reproducible validation harnesses. Start with [`steel-worldgen-service/README.md`](steel-worldgen-service/README.md), the [integration architecture](integration/remote-worldgen/ARCHITECTURE.md), and the [maintained Folia fork](integration/folia-fork/README.md). The Bukkit bridge remains only a projection prototype; native importer evidence is tracked separately.
+This source tree also contains a version-pinned fixed-profile remote NOISE worker, a Bukkit projection plugin, an experimental internal Folia fresh-profile importer, a protocol-776 exploration bot, and reproducible validation harnesses. Start with [`steel-worldgen-service/README.md`](steel-worldgen-service/README.md), the [integration architecture](integration/remote-worldgen/ARCHITECTURE.md), and the [maintained Folia fork](integration/folia-fork/README.md). The Bukkit bridge remains only a projection prototype; native importer evidence is tracked separately.
 
 ## Current status
 

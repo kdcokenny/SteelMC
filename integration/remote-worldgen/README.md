@@ -9,7 +9,7 @@
 - `regenerate-golden.sh`: guarded current-Rust fixture and build-manifest generator.
 - `results/`: superseded historical loopback observations, not current-tree or native-importer proof and not dedicated-host capacity promises.
 
-Supply the exact published Folia 26.2 build-1 paperclip (commit `57f643f10e0a9d01024773232d38ae666067d593`) under Java 25. The harness intentionally pins the published bytes rather than a locally rebuilt, timestamp-varying Paperclip archive:
+Supply the exact published Folia 26.2 build-1 Paperclip (embedded revision `e48800d`) under Java 25. The internal importer is maintained against the separate source pin `57f643f10e0a9d01024773232d38ae666067d593`. The projection harness intentionally pins the published bytes rather than a locally rebuilt, timestamp-varying Paperclip archive:
 
 ```bash
 FOLIA_JAR=/path/to/folia-26.2-1.jar
@@ -23,7 +23,7 @@ ACCEPT_MINECRAFT_EULA=true \
 ./integration/remote-worldgen/run-e2e.sh
 ```
 
-Apply and compile the maintained internal Folia importer separately using [`../folia-fork/README.md`](../folia-fork/README.md); the Bukkit projection E2E uses the published Folia jar and is not native-importer evidence.
+Apply and compile the experimental internal Folia importer separately using [`../folia-fork/README.md`](../folia-fork/README.md); the Bukkit projection E2E uses the published Folia JAR and is not native-importer evidence. A plugin-free diagnostic currently fails closed on a Steel/Folia BIOMES parity mismatch, so keep the importer disabled until that documented foundation is resolved.
 
 The harness refuses a jar-byte mismatch, requires Java 25, runs Gradle and client-bot tests, proves cancellation/drain plus same-position retry, compares artifacts from two clean worker processes, and writes a hash-linked `evidence-summary.json`.
 
