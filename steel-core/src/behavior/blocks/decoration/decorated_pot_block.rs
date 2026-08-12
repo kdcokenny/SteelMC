@@ -42,6 +42,11 @@ use crate::world::{ClipHitResult, LevelReader, ScheduledTickAccess, World};
 const FACING: EnumProperty<Direction> = BlockStateProperties::HORIZONTAL_FACING;
 const WATERLOGGED: BoolProperty = BlockStateProperties::WATERLOGGED;
 const CRACKED: BoolProperty = BlockStateProperties::CRACKED;
+const INSERT_SOUND_VOLUME: f32 = 1.0;
+const INSERT_SOUND_BASE_PITCH: f32 = 0.7;
+const INSERT_SOUND_PITCH_RANGE: f32 = 0.5;
+const INSERT_PARTICLE_Y_OFFSET: f64 = 1.2;
+const INSERT_PARTICLE_COUNT: i32 = 7;
 
 /// Vanilla `DecoratedPotBlock` behavior.
 #[block_behavior]
@@ -190,21 +195,22 @@ impl BlockBehavior for DecoratedPotBlock {
         };
 
         pot.wobble(WobbleStyle::Positive);
+        let pitch = INSERT_SOUND_BASE_PITCH + INSERT_SOUND_PITCH_RANGE * fullness;
         world.play_block_sound(
             &sound_events::BLOCK_DECORATED_POT_INSERT,
             pos,
-            1.0,
-            0.7 + 0.5 * fullness,
+            INSERT_SOUND_VOLUME,
+            pitch,
             None,
         );
         world.send_particles(
             ParticleData::simple(&vanilla_particle_types::DUST_PLUME),
             DVec3::new(
                 f64::from(pos.x()) + 0.5,
-                f64::from(pos.y()) + 1.2,
+                f64::from(pos.y()) + INSERT_PARTICLE_Y_OFFSET,
                 f64::from(pos.z()) + 0.5,
             ),
-            7,
+            INSERT_PARTICLE_COUNT,
             DVec3::ZERO,
             0.0,
         );

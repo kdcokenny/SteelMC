@@ -1,5 +1,11 @@
 use super::{BlockStateId, Identifier, ItemStack};
 
+const FLOAT_RANDOM_BITS: u32 = 24;
+const NONNEGATIVE_I32_RANDOM_BITS: u32 = i32::BITS - 1;
+const DOUBLE_UPPER_RANDOM_BITS: u32 = 26;
+const DOUBLE_LOWER_RANDOM_BITS: u32 = 27;
+const DOUBLE_RANDOM_BITS: u32 = DOUBLE_UPPER_RANDOM_BITS + DOUBLE_LOWER_RANDOM_BITS;
+
 /// Random primitives used by loot evaluation.
 ///
 /// These consume bits with the same algorithms as Vanilla's `RandomSource`.
@@ -12,11 +18,12 @@ pub trait LootRandom: rand::Rng {
 
         let bound_minus_one = bound - 1;
         if bound & bound_minus_one == 0 {
-            return ((i64::from(bound) * i64::from(self.next_u32() >> 1)) >> 31) as i32;
+            let sample = self.next_u32() >> (u32::BITS - NONNEGATIVE_I32_RANDOM_BITS);
+            return ((i64::from(bound) * i64::from(sample)) >> NONNEGATIVE_I32_RANDOM_BITS) as i32;
         }
 
         loop {
-            let sample = (self.next_u32() >> 1) as i32;
+            let sample = (self.next_u32() >> (u32::BITS - NONNEGATIVE_I32_RANDOM_BITS)) as i32;
             let modulo = sample % bound;
             if sample.wrapping_sub(modulo).wrapping_add(bound_minus_one) >= 0 {
                 return modulo;
@@ -35,19 +42,21 @@ pub trait LootRandom: rand::Rng {
 
     /// Matches `RandomSource.nextFloat()`.
     fn next_loot_f32(&mut self) -> f32 {
-        (self.next_u32() >> 8) as f32 * 5.960_464_5e-8_f32
+        let value = self.next_u32() >> (u32::BITS - FLOAT_RANDOM_BITS);
+        value as f32 * (1.0 / (1_u32 << FLOAT_RANDOM_BITS) as f32)
     }
 
     /// Matches `RandomSource.nextDouble()`.
     fn next_loot_f64(&mut self) -> f64 {
-        let upper = u64::from(self.next_u32() >> 6);
-        let lower = u64::from(self.next_u32() >> 5);
-        ((upper << 27) + lower) as f64 * (1.0 / (1_u64 << 53) as f64)
+        let upper = u64::from(self.next_u32() >> (u32::BITS - DOUBLE_UPPER_RANDOM_BITS));
+        let lower = u64::from(self.next_u32() >> (u32::BITS - DOUBLE_LOWER_RANDOM_BITS));
+        let value = (upper << DOUBLE_LOWER_RANDOM_BITS) + lower;
+        value as f64 * (1.0 / (1_u64 << DOUBLE_RANDOM_BITS) as f64)
     }
 
     /// Matches `RandomSource.nextBoolean()`.
     fn next_loot_bool(&mut self) -> bool {
-        self.next_u32() >> 31 != 0
+        self.next_u32() >> (u32::BITS - 1) != 0
     }
 }
 

@@ -25,6 +25,8 @@ pub struct BlockItem {
 
 impl BlockItem {
     const PLACE_BLOCK_FLAGS: UpdateFlags = UpdateFlags::UPDATE_ALL_IMMEDIATE;
+    const PLACE_SOUND_VOLUME_BASELINE: f32 = 1.0;
+    const PLACE_SOUND_PITCH_SCALE: f32 = 0.8;
 
     /// Creates a new block item behavior for the given block.
     #[must_use]
@@ -121,8 +123,8 @@ impl BlockItem {
         context.world.play_block_sound(
             sound_type.place_sound,
             place_pos,
-            f32::midpoint(sound_type.volume, 1.0),
-            sound_type.pitch * 0.8,
+            f32::midpoint(sound_type.volume, Self::PLACE_SOUND_VOLUME_BASELINE),
+            sound_type.pitch * Self::PLACE_SOUND_PITCH_SCALE,
             context.player().map(Entity::id),
         );
         context.world.game_event(
