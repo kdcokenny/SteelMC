@@ -6,7 +6,7 @@ use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{BlockStateProperties, BoolProperty};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::item::BlockHitResult;
-use steel_registry::loot_table::LootContext;
+use steel_registry::loot_table::{LootContext, RandLootRandom};
 use steel_registry::{
     sound_events, vanilla_blocks, vanilla_game_events, vanilla_items, vanilla_loot_tables,
 };
@@ -82,11 +82,13 @@ impl CaveVinesBlock {
             return InteractionResult::Pass;
         }
         let mut rng = rand::rng();
-        let mut ctx = LootContext::new(&mut rng)
-            .with_block_state(state)
-            .with_interacting_entity(entity_loot_ref(source_entity));
-
-        let items = vanilla_loot_tables::HARVEST_CAVE_VINE.get_random_items(&mut ctx);
+        let items = {
+            let mut loot_random = RandLootRandom::new(&mut rng);
+            let mut ctx = LootContext::new(&mut loot_random)
+                .with_block_state(state)
+                .with_interacting_entity(entity_loot_ref(source_entity));
+            vanilla_loot_tables::HARVEST_CAVE_VINE.get_random_items(&mut ctx)
+        };
         for item in items {
             world.pop_resource(pos, item);
         }

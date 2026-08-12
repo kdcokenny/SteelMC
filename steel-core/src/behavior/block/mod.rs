@@ -16,7 +16,7 @@ use steel_registry::blocks::shapes::{
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::fluid::{FluidRef, FluidState};
 use steel_registry::item_stack::ItemStack;
-use steel_registry::loot_table::{LootContext, LootTableRef};
+use steel_registry::loot_table::{LootContext, LootTableRef, RandLootRandom};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::sound_types::SoundType;
 use steel_registry::vanilla_block_tags::BlockTag;
@@ -66,7 +66,8 @@ pub(crate) fn drop_from_block_interact_loot_table(
     interacting_entity: Option<&dyn Entity>,
     rng: &mut ThreadRng,
 ) -> Vec<ItemStack> {
-    let mut ctx = LootContext::new(rng).with_block_state(interacted_block_state);
+    let mut loot_random = RandLootRandom::new(rng);
+    let mut ctx = LootContext::new(&mut loot_random).with_block_state(interacted_block_state);
 
     // TODO: Add the block entity to the context when it can be done.
 

@@ -20,6 +20,8 @@ pub mod names {
 
     /// Vanilla `TicketStorage.TYPE`, persisted as `data/chunk_tickets.toml`.
     pub const CHUNK_TICKETS: SavedDataName = SavedDataName::trusted("chunk_tickets");
+    /// Vanilla `RandomSequences.TYPE`, persisted as `data/random_sequences.toml`.
+    pub const RANDOM_SEQUENCES: SavedDataName = SavedDataName::trusted("random_sequences");
     /// Cached concentric-ring positions, persisted as `data/structure_rings.bin`.
     pub const STRUCTURE_RINGS: WincodeSavedDataName =
         WincodeSavedDataName::trusted("structure_rings", *b"STLR", 2);

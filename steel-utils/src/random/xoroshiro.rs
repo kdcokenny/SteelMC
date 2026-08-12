@@ -40,6 +40,28 @@ impl Xoroshiro {
         Self::new(lo, hi)
     }
 
+    /// Creates a source from Vanilla's serialized Xoroshiro state.
+    #[must_use]
+    pub const fn from_state(seed_lo: u64, seed_hi: u64) -> Self {
+        Self::new(seed_lo, seed_hi)
+    }
+
+    /// Creates a named `RandomSequence` source from its world seed and MD5 key hash.
+    #[must_use]
+    pub const fn from_seed_and_key_hash(seed: u64, key_hash: [u64; 2]) -> Self {
+        let (seed_lo, seed_hi) = Self::upgrade_seed_to_128_bit(seed);
+        Self::new(
+            mix_stafford_13(seed_lo ^ key_hash[0]),
+            mix_stafford_13(seed_hi ^ key_hash[1]),
+        )
+    }
+
+    /// Returns the state serialized by Vanilla's `XoroshiroRandomSource` codec.
+    #[must_use]
+    pub const fn state(&self) -> (u64, u64) {
+        (self.seed_lo, self.seed_hi)
+    }
+
     const fn new(lo: u64, hi: u64) -> Self {
         let (lo, hi) = if (lo | hi) == 0 {
             (GOLDEN_RATIO_64, SILVER_RATIO_64)

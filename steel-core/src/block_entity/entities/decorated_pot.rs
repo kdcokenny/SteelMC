@@ -20,7 +20,7 @@ use steel_registry::data_components::vanilla_components::{
     BLOCK_ENTITY_DATA, CONTAINER, POT_DECORATIONS,
 };
 use steel_registry::item_stack::ItemStack;
-use steel_registry::loot_table::{LootContext, LootRandom, LootTableRef};
+use steel_registry::loot_table::{LootContext, LootRandom, LootTableRef, SteelLootRandom};
 #[cfg(test)]
 use steel_registry::vanilla_blocks;
 use steel_registry::{REGISTRY, RegistryExt as _, vanilla_block_entity_types, vanilla_items};
@@ -235,9 +235,9 @@ impl DecoratedPotBlockEntity {
     }
 
     fn unpack_loot_table(&self) {
-        if self.get_level().is_none() {
+        let Some(world) = self.get_level() else {
             return;
-        }
+        };
         let Some((loot_table_key, seed)) = ({
             let mut container = self.container.lock();
             container
@@ -252,12 +252,20 @@ impl DecoratedPotBlockEntity {
             return;
         };
 
-        if seed == 0 {
-            let mut random = rand::rng();
-            self.fill_loot_table(loot_table, &mut random);
-        } else {
+        if seed != 0 {
             let mut random = LegacyRandom::from_seed(seed as u64);
-            self.fill_loot_table(loot_table, &mut random);
+            let mut loot_random = SteelLootRandom::new(&mut random);
+            self.fill_loot_table(loot_table, &mut loot_random);
+        } else if let Some(random_sequence) = loot_table.random_sequence.as_ref() {
+            world.with_random_sequence(random_sequence, |random| {
+                let mut loot_random = SteelLootRandom::new(random);
+                self.fill_loot_table(loot_table, &mut loot_random);
+            });
+        } else {
+            world.with_level_random(|random| {
+                let mut loot_random = SteelLootRandom::new(random);
+                self.fill_loot_table(loot_table, &mut loot_random);
+            });
         }
         self.set_changed();
     }
@@ -612,5 +620,29 @@ mod tests {
             &first_item
         ));
         assert_eq!(first.item().count(), first_item.count());
+    }
+
+    #[test]
+    fn zero_seed_pots_share_the_vanilla_named_sequence() {
+        init_vanilla_registry();
+        let world = fresh_test_world("decorated_pot_named_sequence");
+        let first = test_pot(Arc::downgrade(&world));
+        let second = test_pot(Arc::downgrade(&world));
+        let mut loot_nbt = NbtCompound::new();
+        loot_nbt.insert(
+            "LootTable",
+            vanilla_loot_tables::POTS_TRIAL_CHAMBERS_CORRIDOR
+                .key
+                .to_string(),
+        );
+        load_owned(&first, &loot_nbt);
+        load_owned(&second, &loot_nbt);
+
+        let first_item = first.item();
+        let second_item = second.item();
+        assert!(first_item.is(&vanilla_items::EMERALD));
+        assert_eq!(first_item.count(), 3);
+        assert!(second_item.is(&vanilla_items::EMERALD));
+        assert_eq!(second_item.count(), 2);
     }
 }

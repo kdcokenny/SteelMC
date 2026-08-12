@@ -6,8 +6,34 @@ use crate::{init_vanilla_registry, vanilla_loot_tables};
 use super::*;
 use rand::SeedableRng;
 
-fn test_rng() -> rand::rngs::StdRng {
-    rand::rngs::StdRng::seed_from_u64(12345)
+struct TestLootRandom(rand::rngs::StdRng);
+
+impl TestLootRandom {
+    fn from_seed(seed: u64) -> Self {
+        Self(rand::rngs::StdRng::seed_from_u64(seed))
+    }
+}
+
+impl LootRandom for TestLootRandom {
+    fn next_loot_i32_bounded(&mut self, bound: i32) -> i32 {
+        RandLootRandom::new(&mut self.0).next_loot_i32_bounded(bound)
+    }
+
+    fn next_loot_f32(&mut self) -> f32 {
+        RandLootRandom::new(&mut self.0).next_loot_f32()
+    }
+
+    fn next_loot_f64(&mut self) -> f64 {
+        RandLootRandom::new(&mut self.0).next_loot_f64()
+    }
+
+    fn next_loot_bool(&mut self) -> bool {
+        RandLootRandom::new(&mut self.0).next_loot_bool()
+    }
+}
+
+fn test_rng() -> TestLootRandom {
+    TestLootRandom::from_seed(12345)
 }
 
 fn init_test_registries() {
@@ -47,7 +73,8 @@ static FILL_TABLE: LootTable = LootTable {
 fn legacy_loot_random_matches_vanilla_random_source_primitives() {
     use steel_utils::random::{Random, legacy_random::LegacyRandom};
 
-    let mut actual = LegacyRandom::from_seed(0);
+    let mut actual_source = LegacyRandom::from_seed(0);
+    let mut actual = SteelLootRandom::new(&mut actual_source);
     let mut expected = LegacyRandom::from_seed(0);
     for bound in [15, 2, 17, 1, 31, 7, 64, 63] {
         assert_eq!(
@@ -56,7 +83,8 @@ fn legacy_loot_random_matches_vanilla_random_source_primitives() {
         );
     }
 
-    let mut actual = LegacyRandom::from_seed(42);
+    let mut actual_source = LegacyRandom::from_seed(42);
+    let mut actual = SteelLootRandom::new(&mut actual_source);
     let mut expected = LegacyRandom::from_seed(42);
     for _ in 0..16 {
         assert_eq!(actual.next_loot_f32(), Random::next_f32(&mut expected));
@@ -70,7 +98,8 @@ fn fill_matches_vanilla_slot_shuffle_and_stack_splitting() {
     use steel_utils::random::legacy_random::LegacyRandom;
 
     init_test_registries();
-    let mut rng = LegacyRandom::from_seed(123);
+    let mut random = LegacyRandom::from_seed(123);
+    let mut rng = SteelLootRandom::new(&mut random);
     let mut context = LootContext::new(&mut rng);
     let mut slots = [
         ItemStack::new(&vanilla_items::DIRT),
@@ -225,7 +254,7 @@ fn test_uniform_get_int_reaches_inclusive_max() {
     let provider = NumberProvider::Uniform { min: 1.0, max: 3.0 };
     let mut seen = [false; 4];
     for seed in 0u64..1000 {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut rng = TestLootRandom::from_seed(seed);
         let value = provider.get_int(&mut rng);
         seen[value as usize] = true;
     }
@@ -250,7 +279,7 @@ fn test_explosion_decay_function() {
     let initial_count = 10;
 
     for seed in 0u64..100 {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut rng = TestLootRandom::from_seed(seed);
         let mut ctx = LootContext::new(&mut rng).with_explosion(4.0);
         let mut item = ItemStack::with_count(&crate::vanilla_items::STONE, initial_count);
         cond_func.function.apply(&mut item, &mut ctx);
@@ -296,7 +325,7 @@ fn test_survives_explosion_condition() {
     // Gravel has survives_explosion on its alternatives
     let mut survived = 0;
     for seed in 0..100 {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut rng = TestLootRandom::from_seed(seed);
         let mut ctx = LootContext::new(&mut rng).with_explosion(4.0);
         let items = vanilla_loot_tables::BLOCKS_GRAVEL.get_random_items(&mut ctx);
         if !items.is_empty() {

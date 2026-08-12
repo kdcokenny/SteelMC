@@ -364,7 +364,8 @@ impl World {
         };
 
         let mut rng = rand::rng();
-        let mut ctx = LootContext::new(&mut rng)
+        let mut loot_random = steel_registry::loot_table::RandLootRandom::new(&mut rng);
+        let mut ctx = LootContext::new(&mut loot_random)
             .with_luck(context.luck())
             .with_block_state(state)
             .with_origin(

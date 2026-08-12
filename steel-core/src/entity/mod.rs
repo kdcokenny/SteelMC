@@ -30,7 +30,7 @@ use steel_registry::game_events::GameEventRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
 use steel_registry::loot_table::{
-    DamageSourceInfo, EntityRef, EntityRefFlags, LootContext, LootTableRef,
+    DamageSourceInfo, EntityRef, EntityRefFlags, LootContext, LootTableRef, RandLootRandom,
 };
 use steel_registry::mob_effect::MobEffectRef;
 use steel_registry::sound_event::SoundEventRef;

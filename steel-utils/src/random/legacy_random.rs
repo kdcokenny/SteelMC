@@ -1,7 +1,3 @@
-use std::convert::Infallible;
-
-use rand::rand_core::utils::fill_bytes_via_next_word;
-
 use crate::random::{
     PositionalRandom, Random, RandomSource, RandomSplitter, gaussian::MarsagliaPolarGaussian,
     get_seed, name_hash::NameHash,
@@ -190,24 +186,6 @@ impl Random for LegacyRandom {
         if count > 0 {
             self.skip(count as u64);
         }
-    }
-}
-
-/// Raw-word adapter for APIs that accept a `rand` generator. Callers that need
-/// Vanilla derived values should use `Random` or a domain-specific adapter.
-impl rand::TryRng for LegacyRandom {
-    type Error = Infallible;
-
-    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        Ok(Random::next_i32(self) as u32)
-    }
-
-    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-        Ok(Random::next_i64(self) as u64)
-    }
-
-    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
-        fill_bytes_via_next_word(dst, || self.try_next_u64())
     }
 }
 

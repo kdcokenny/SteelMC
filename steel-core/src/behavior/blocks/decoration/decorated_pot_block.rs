@@ -194,6 +194,8 @@ impl BlockBehavior for DecoratedPotBlock {
             return InteractionResult::TryEmptyHandInteraction;
         };
 
+        // TODO(statistics): Have `insert_item` return the inserted item type with `fullness`, then
+        // award Vanilla's `Stats.ITEM_USED` here. Failed insertions must not award it.
         pot.wobble(WobbleStyle::Positive);
         let pitch = INSERT_SOUND_BASE_PITCH + INSERT_SOUND_PITCH_RANGE * fullness;
         world.play_block_sound(

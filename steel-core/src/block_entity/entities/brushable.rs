@@ -10,7 +10,7 @@ use simdnbt::owned::NbtCompound;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::item_stack::ItemStack;
-use steel_registry::loot_table::{LootContext, LootTableRef};
+use steel_registry::loot_table::{LootContext, LootTableRef, RandLootRandom};
 use steel_registry::{
     REGISTRY, RegistryExt as _, vanilla_block_entity_types, vanilla_blocks, vanilla_entities,
 };
@@ -222,9 +222,10 @@ impl BrushableBlockEntity {
         player: &Player,
         brush: &ItemStack,
     ) {
+        let mut loot_random = RandLootRandom::new(rng);
         let loot = match loot_table {
             Some(table) => {
-                let mut ctx = LootContext::new(rng)
+                let mut ctx = LootContext::new(&mut loot_random)
                     .with_luck(player.get_luck())
                     .with_tool(brush)
                     .with_origin(

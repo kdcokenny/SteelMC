@@ -1,4 +1,5 @@
 use super::{BlockStateId, Identifier, ItemStack};
+use steel_utils::random::Random;
 
 const FLOAT_RANDOM_BITS: u32 = 24;
 const NONNEGATIVE_I32_RANDOM_BITS: u32 = i32::BITS - 1;
@@ -7,29 +8,9 @@ const DOUBLE_LOWER_RANDOM_BITS: u32 = 27;
 const DOUBLE_RANDOM_BITS: u32 = DOUBLE_UPPER_RANDOM_BITS + DOUBLE_LOWER_RANDOM_BITS;
 
 /// Random primitives used by loot evaluation.
-///
-/// These consume bits with the same algorithms as Vanilla's `RandomSource`.
-/// Any `rand` generator can be used, including Steel's `LegacyRandom` for an
-/// explicit Vanilla loot-table seed.
-pub trait LootRandom: rand::Rng {
+pub trait LootRandom {
     /// Matches `RandomSource.nextInt(bound)`.
-    fn next_loot_i32_bounded(&mut self, bound: i32) -> i32 {
-        assert!(bound > 0, "loot random bound must be positive");
-
-        let bound_minus_one = bound - 1;
-        if bound & bound_minus_one == 0 {
-            let sample = self.next_u32() >> (u32::BITS - NONNEGATIVE_I32_RANDOM_BITS);
-            return ((i64::from(bound) * i64::from(sample)) >> NONNEGATIVE_I32_RANDOM_BITS) as i32;
-        }
-
-        loop {
-            let sample = (self.next_u32() >> (u32::BITS - NONNEGATIVE_I32_RANDOM_BITS)) as i32;
-            let modulo = sample % bound;
-            if sample.wrapping_sub(modulo).wrapping_add(bound_minus_one) >= 0 {
-                return modulo;
-            }
-        }
-    }
+    fn next_loot_i32_bounded(&mut self, bound: i32) -> i32;
 
     /// Matches `Mth.nextInt(random, min, max)`.
     fn next_loot_i32_inclusive(&mut self, min: i32, max: i32) -> i32 {
@@ -41,26 +22,88 @@ pub trait LootRandom: rand::Rng {
     }
 
     /// Matches `RandomSource.nextFloat()`.
+    fn next_loot_f32(&mut self) -> f32;
+
+    /// Matches `RandomSource.nextDouble()`.
+    fn next_loot_f64(&mut self) -> f64;
+
+    /// Matches `RandomSource.nextBoolean()`.
+    fn next_loot_bool(&mut self) -> bool;
+}
+
+/// Adapts a Steel `RandomSource` without changing its algorithm's bit consumption.
+pub struct SteelLootRandom<'a, R: ?Sized>(&'a mut R);
+
+impl<'a, R: Random + ?Sized> SteelLootRandom<'a, R> {
+    /// Wraps a Steel random source for loot evaluation.
+    pub const fn new(random: &'a mut R) -> Self {
+        Self(random)
+    }
+}
+
+impl<R: Random + ?Sized> LootRandom for SteelLootRandom<'_, R> {
+    fn next_loot_i32_bounded(&mut self, bound: i32) -> i32 {
+        self.0.next_i32_bounded(bound)
+    }
+
     fn next_loot_f32(&mut self) -> f32 {
-        let value = self.next_u32() >> (u32::BITS - FLOAT_RANDOM_BITS);
+        self.0.next_f32()
+    }
+
+    fn next_loot_f64(&mut self) -> f64 {
+        self.0.next_f64()
+    }
+
+    fn next_loot_bool(&mut self) -> bool {
+        self.0.next_bool()
+    }
+}
+
+/// Adapts a `rand` generator with Vanilla legacy-random derived-value rules.
+pub struct RandLootRandom<'a, R: ?Sized>(&'a mut R);
+
+impl<'a, R: rand::Rng + ?Sized> RandLootRandom<'a, R> {
+    /// Wraps a `rand` generator for loot evaluation.
+    pub const fn new(random: &'a mut R) -> Self {
+        Self(random)
+    }
+}
+
+impl<R: rand::Rng + ?Sized> LootRandom for RandLootRandom<'_, R> {
+    fn next_loot_i32_bounded(&mut self, bound: i32) -> i32 {
+        assert!(bound > 0, "loot random bound must be positive");
+
+        let bound_minus_one = bound - 1;
+        if bound & bound_minus_one == 0 {
+            let sample = self.0.next_u32() >> (u32::BITS - NONNEGATIVE_I32_RANDOM_BITS);
+            return ((i64::from(bound) * i64::from(sample)) >> NONNEGATIVE_I32_RANDOM_BITS) as i32;
+        }
+
+        loop {
+            let sample = (self.0.next_u32() >> (u32::BITS - NONNEGATIVE_I32_RANDOM_BITS)) as i32;
+            let modulo = sample % bound;
+            if sample.wrapping_sub(modulo).wrapping_add(bound_minus_one) >= 0 {
+                return modulo;
+            }
+        }
+    }
+
+    fn next_loot_f32(&mut self) -> f32 {
+        let value = self.0.next_u32() >> (u32::BITS - FLOAT_RANDOM_BITS);
         value as f32 * (1.0 / (1_u32 << FLOAT_RANDOM_BITS) as f32)
     }
 
-    /// Matches `RandomSource.nextDouble()`.
     fn next_loot_f64(&mut self) -> f64 {
-        let upper = u64::from(self.next_u32() >> (u32::BITS - DOUBLE_UPPER_RANDOM_BITS));
-        let lower = u64::from(self.next_u32() >> (u32::BITS - DOUBLE_LOWER_RANDOM_BITS));
+        let upper = u64::from(self.0.next_u32() >> (u32::BITS - DOUBLE_UPPER_RANDOM_BITS));
+        let lower = u64::from(self.0.next_u32() >> (u32::BITS - DOUBLE_LOWER_RANDOM_BITS));
         let value = (upper << DOUBLE_LOWER_RANDOM_BITS) + lower;
         value as f64 * (1.0 / (1_u64 << DOUBLE_RANDOM_BITS) as f64)
     }
 
-    /// Matches `RandomSource.nextBoolean()`.
     fn next_loot_bool(&mut self) -> bool {
-        self.next_u32() >> (u32::BITS - 1) != 0
+        self.0.next_u32() >> (u32::BITS - 1) != 0
     }
 }
-
-impl<R: rand::Rng + ?Sized> LootRandom for R {}
 
 /// Entity target for loot context lookups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,7 +346,7 @@ pub struct LootContextRef<'a> {
 /// Context for loot table evaluation, containing all relevant game state.
 ///
 /// This mirrors vanilla's `LootContext` / `LootParams` system.
-pub struct LootContext<'a, R: rand::Rng> {
+pub struct LootContext<'a, R: LootRandom> {
     /// Random number generator.
     pub rng: &'a mut R,
     /// Luck value (e.g., from Luck of the Sea enchantment).
@@ -404,7 +447,7 @@ pub struct BlockEntityRef<'a> {
     pub inventory: Option<&'a [ItemStack]>,
 }
 
-impl<'a, R: rand::Rng> LootContext<'a, R> {
+impl<'a, R: LootRandom> LootContext<'a, R> {
     /// Create a new loot context with just an RNG.
     pub const fn new(rng: &'a mut R) -> Self {
         Self {
