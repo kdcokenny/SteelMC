@@ -14,6 +14,83 @@ fn init_test_registries() {
     init_vanilla_registry();
 }
 
+static FILL_ENTRY_FUNCTIONS: &[ConditionalLootFunction] = &[ConditionalLootFunction {
+    function: LootFunction::SetCount {
+        count: NumberProvider::Constant(8.0),
+        add: false,
+    },
+    conditions: &[],
+}];
+static FILL_ENTRIES: &[LootEntry] = &[LootEntry::Item {
+    name: Identifier::vanilla_static("stone"),
+    weight: 1,
+    quality: 0,
+    conditions: &[],
+    functions: FILL_ENTRY_FUNCTIONS,
+}];
+static FILL_POOLS: &[LootPool] = &[LootPool {
+    rolls: NumberProvider::Constant(1.0),
+    bonus_rolls: 0.0,
+    entries: FILL_ENTRIES,
+    conditions: &[],
+    functions: &[],
+}];
+static FILL_TABLE: LootTable = LootTable {
+    key: Identifier::vanilla_static("test/fill"),
+    loot_type: LootType::Chest,
+    pools: FILL_POOLS,
+    functions: &[],
+    random_sequence: None,
+};
+
+#[test]
+fn legacy_loot_random_matches_vanilla_random_source_primitives() {
+    use steel_utils::random::{Random, legacy_random::LegacyRandom};
+
+    let mut actual = LegacyRandom::from_seed(0);
+    let mut expected = LegacyRandom::from_seed(0);
+    for bound in [15, 2, 17, 1, 31, 7, 64, 63] {
+        assert_eq!(
+            actual.next_loot_i32_bounded(bound),
+            Random::next_i32_bounded(&mut expected, bound)
+        );
+    }
+
+    let mut actual = LegacyRandom::from_seed(42);
+    let mut expected = LegacyRandom::from_seed(42);
+    for _ in 0..16 {
+        assert_eq!(actual.next_loot_f32(), Random::next_f32(&mut expected));
+        assert_eq!(actual.next_loot_bool(), Random::next_bool(&mut expected));
+        assert_eq!(actual.next_loot_f64(), Random::next_f64(&mut expected));
+    }
+}
+
+#[test]
+fn fill_matches_vanilla_slot_shuffle_and_stack_splitting() {
+    use steel_utils::random::legacy_random::LegacyRandom;
+
+    init_test_registries();
+    let mut rng = LegacyRandom::from_seed(123);
+    let mut context = LootContext::new(&mut rng);
+    let mut slots = [
+        ItemStack::new(&vanilla_items::DIRT),
+        ItemStack::empty(),
+        ItemStack::empty(),
+        ItemStack::empty(),
+    ];
+
+    FILL_TABLE.fill(&mut context, &mut slots);
+
+    assert_eq!(slots[0].item, &*vanilla_items::DIRT);
+    assert_eq!(slots[0].count, 1);
+    assert!(
+        slots[1..]
+            .iter()
+            .all(|stack| stack.item == &*vanilla_items::STONE)
+    );
+    assert_eq!(slots.map(|stack| stack.count), [1, 1, 1, 6]);
+}
+
 #[test]
 fn test_oak_log_loot() {
     init_test_registries();

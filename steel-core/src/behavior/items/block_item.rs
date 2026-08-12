@@ -2,7 +2,9 @@
 
 use steel_macros::item_behavior;
 use steel_registry::{
+    REGISTRY,
     blocks::{BlockRef, block_state_ext::BlockStateExt},
+    data_components::vanilla_components::BLOCK_STATE,
     vanilla_blocks, vanilla_game_events,
 };
 use steel_utils::{BlockStateId, types::UpdateFlags};
@@ -28,6 +30,47 @@ impl BlockItem {
     #[must_use]
     pub const fn new(block: BlockRef) -> Self {
         Self { block }
+    }
+
+    fn apply_item_block_state(
+        context: &BlockPlaceContext<'_>,
+        mut state: BlockStateId,
+    ) -> BlockStateId {
+        context.source().with_item(|stack| {
+            let Some(properties) = stack.get(BLOCK_STATE) else {
+                return state;
+            };
+
+            for (name, value) in properties.properties() {
+                let current = REGISTRY.blocks.get_properties(state);
+                if !current
+                    .iter()
+                    .any(|(property_name, _)| *property_name == name)
+                {
+                    continue;
+                }
+                let overridden: Vec<_> = current
+                    .iter()
+                    .map(|(property_name, property_value)| {
+                        (
+                            *property_name,
+                            if *property_name == name {
+                                value.as_str()
+                            } else {
+                                *property_value
+                            },
+                        )
+                    })
+                    .collect();
+                if let Some(modified) = REGISTRY
+                    .blocks
+                    .state_id_from_block_properties(state.get_block(), &overridden)
+                {
+                    state = modified;
+                }
+            }
+            state
+        })
     }
 
     pub(super) fn place_with(
@@ -58,19 +101,28 @@ impl BlockItem {
             return InteractionResult::Fail;
         }
 
-        let placed_state = context.world.get_block_state(place_pos);
+        let mut placed_state = context.world.get_block_state(place_pos);
         if placed_state.get_block() == self.block {
+            let modified_state = Self::apply_item_block_state(&context, placed_state);
+            if modified_state != placed_state {
+                let _ =
+                    context
+                        .world
+                        .set_block(place_pos, modified_state, UpdateFlags::UPDATE_CLIENTS);
+                placed_state = context.world.get_block_state(place_pos);
+            }
             let placed_behavior = BLOCK_BEHAVIORS.get_behavior(placed_state.get_block());
             placed_behavior.set_placed_by(placed_state, context.world, place_pos, context.source());
         }
 
         // Play place sound (exclude the placing player, they hear it client-side)
-        let sound_type = &self.block.config.sound_type;
+        let placed_behavior = BLOCK_BEHAVIORS.get_behavior(placed_state.get_block());
+        let sound_type = placed_behavior.get_sound_type(placed_state);
         context.world.play_block_sound(
             sound_type.place_sound,
             place_pos,
-            sound_type.volume,
-            sound_type.pitch,
+            f32::midpoint(sound_type.volume, 1.0),
+            sound_type.pitch * 0.8,
             context.player().map(Entity::id),
         );
         context.world.game_event(

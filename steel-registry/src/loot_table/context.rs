@@ -1,4 +1,57 @@
-use super::{BlockStateId, Identifier, ItemStack, RngExt};
+use super::{BlockStateId, Identifier, ItemStack};
+
+/// Random primitives used by loot evaluation.
+///
+/// These consume bits with the same algorithms as Vanilla's `RandomSource`.
+/// Any `rand` generator can be used, including Steel's `LegacyRandom` for an
+/// explicit Vanilla loot-table seed.
+pub trait LootRandom: rand::Rng {
+    /// Matches `RandomSource.nextInt(bound)`.
+    fn next_loot_i32_bounded(&mut self, bound: i32) -> i32 {
+        assert!(bound > 0, "loot random bound must be positive");
+
+        let bound_minus_one = bound - 1;
+        if bound & bound_minus_one == 0 {
+            return ((i64::from(bound) * i64::from(self.next_u32() >> 1)) >> 31) as i32;
+        }
+
+        loop {
+            let sample = (self.next_u32() >> 1) as i32;
+            let modulo = sample % bound;
+            if sample.wrapping_sub(modulo).wrapping_add(bound_minus_one) >= 0 {
+                return modulo;
+            }
+        }
+    }
+
+    /// Matches `Mth.nextInt(random, min, max)`.
+    fn next_loot_i32_inclusive(&mut self, min: i32, max: i32) -> i32 {
+        if min >= max {
+            min
+        } else {
+            self.next_loot_i32_bounded(max.wrapping_sub(min).wrapping_add(1)) + min
+        }
+    }
+
+    /// Matches `RandomSource.nextFloat()`.
+    fn next_loot_f32(&mut self) -> f32 {
+        (self.next_u32() >> 8) as f32 * 5.960_464_5e-8_f32
+    }
+
+    /// Matches `RandomSource.nextDouble()`.
+    fn next_loot_f64(&mut self) -> f64 {
+        let upper = u64::from(self.next_u32() >> 6);
+        let lower = u64::from(self.next_u32() >> 5);
+        ((upper << 27) + lower) as f64 * (1.0 / (1_u64 << 53) as f64)
+    }
+
+    /// Matches `RandomSource.nextBoolean()`.
+    fn next_loot_bool(&mut self) -> bool {
+        self.next_u32() >> 31 != 0
+    }
+}
+
+impl<R: rand::Rng + ?Sized> LootRandom for R {}
 
 /// Entity target for loot context lookups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,14 +132,20 @@ pub enum ScoreboardTarget {
 
 impl NumberProvider {
     /// Get a value from this provider using the given RNG.
-    pub fn get<R: rand::Rng>(&self, rng: &mut R, ctx: Option<&LootContextRef<'_>>) -> f32 {
+    pub fn get<R: LootRandom>(&self, rng: &mut R, ctx: Option<&LootContextRef<'_>>) -> f32 {
         match self {
             Self::Constant(v) => *v,
-            Self::Uniform { min, max } => rng.random_range(*min..=*max),
+            Self::Uniform { min, max } => {
+                if min >= max {
+                    *min
+                } else {
+                    rng.next_loot_f32() * (*max - *min) + *min
+                }
+            }
             Self::Binomial { n, p } => {
                 let mut count = 0;
                 for _ in 0..*n {
-                    if rng.random::<f32>() < *p {
+                    if rng.next_loot_f32() < *p {
                         count += 1;
                     }
                 }
@@ -109,14 +168,20 @@ impl NumberProvider {
     }
 
     /// Get a value without context (for backwards compatibility).
-    pub fn get_simple(&self, rng: &mut impl rand::Rng) -> f32 {
+    pub fn get_simple(&self, rng: &mut impl LootRandom) -> f32 {
         match self {
             Self::Constant(v) => *v,
-            Self::Uniform { min, max } => rng.random_range(*min..=*max),
+            Self::Uniform { min, max } => {
+                if min >= max {
+                    *min
+                } else {
+                    rng.next_loot_f32() * (*max - *min) + *min
+                }
+            }
             Self::Binomial { n, p } => {
                 let mut count = 0;
                 for _ in 0..*n {
-                    if rng.random::<f32>() < *p {
+                    if rng.next_loot_f32() < *p {
                         count += 1;
                     }
                 }
@@ -128,7 +193,7 @@ impl NumberProvider {
     }
 
     /// Get the value as an integer.
-    pub fn get_int(&self, rng: &mut impl rand::Rng) -> i32 {
+    pub fn get_int(&self, rng: &mut impl LootRandom) -> i32 {
         match self {
             Self::Uniform { min, max } => uniform_int(rng, math_round(*min), math_round(*max)),
             other => math_round(other.get_simple(rng)),
@@ -136,7 +201,7 @@ impl NumberProvider {
     }
 
     /// Get the value as an integer with context.
-    pub fn get_int_with_ctx<R: rand::Rng>(
+    pub fn get_int_with_ctx<R: LootRandom>(
         &self,
         rng: &mut R,
         ctx: Option<&LootContextRef<'_>>,
@@ -155,12 +220,8 @@ fn math_round(value: f32) -> i32 {
 
 /// Vanilla `Mth.nextInt(random, min, max)` is inclusive and clamps to `min`
 /// when `min >= max`.
-fn uniform_int(rng: &mut impl rand::Rng, min: i32, max: i32) -> i32 {
-    if min >= max {
-        min
-    } else {
-        rng.random_range(min..=max)
-    }
+fn uniform_int(rng: &mut impl LootRandom, min: i32, max: i32) -> i32 {
+    rng.next_loot_i32_inclusive(min, max)
 }
 
 /// A range for number comparisons (used in `ValueCheck`, `TimeCheck`, `EntityScores`).
@@ -172,7 +233,7 @@ pub struct NumberProviderRange {
 
 impl NumberProviderRange {
     /// Check if a value is within this range.
-    pub fn test(&self, value: f32, rng: &mut impl rand::Rng) -> bool {
+    pub fn test(&self, value: f32, rng: &mut impl LootRandom) -> bool {
         if let Some(min) = &self.min
             && value < min.get_simple(rng)
         {

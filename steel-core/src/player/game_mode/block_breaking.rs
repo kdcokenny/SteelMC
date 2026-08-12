@@ -21,6 +21,7 @@ use steel_utils::{
 };
 
 use crate::behavior::{BLOCK_BEHAVIORS, BlockLootContext};
+use crate::block_entity::SharedBlockEntity;
 use crate::entity::{Entity, LivingEntity};
 use crate::fluid::fluid_state_to_block;
 use crate::player::Player;
@@ -352,6 +353,9 @@ impl BlockBreakingManager {
         // TODO: Check blockActionRestricted
 
         let behavior = BLOCK_BEHAVIORS.get_behavior(state.get_block());
+        // Vanilla captures the block entity before `playerWillDestroy` and block removal,
+        // then supplies that same instance to loot generation and `playerDestroy`.
+        let block_entity = world.get_block_entity(pos);
         let adjusted_state = behavior.player_will_destroy(state, world, pos, player);
         world.game_event(
             &vanilla_game_events::BLOCK_DESTROY,
@@ -433,8 +437,14 @@ impl BlockBreakingManager {
                 && game_mode != GameType::Creative
                 && has_correct_tool
             {
-                drop_block_loot(player, world, pos, adjusted_state, &destroyed_with);
-                let block_entity = world.get_block_entity(pos);
+                drop_block_loot(
+                    player,
+                    world,
+                    pos,
+                    adjusted_state,
+                    block_entity.as_ref(),
+                    &destroyed_with,
+                );
                 behavior.player_destroy(
                     world,
                     player,
@@ -543,6 +553,7 @@ fn drop_block_loot(
     world: &Arc<World>,
     pos: BlockPos,
     state: BlockStateId,
+    block_entity: Option<&SharedBlockEntity>,
     tool: &ItemStack,
 ) {
     let luck = player
@@ -552,6 +563,7 @@ fn drop_block_loot(
         .unwrap_or(0.0) as f32;
 
     let drops = BlockLootContext::new(world, pos)
+        .with_block_entity(block_entity)
         .with_luck(luck)
         .with_tool(tool)
         .get_drops(state);

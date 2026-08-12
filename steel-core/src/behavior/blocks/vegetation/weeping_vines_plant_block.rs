@@ -82,6 +82,8 @@ impl BlockBehavior for WeepingVinesPlantBlock {
     fn get_clone_item_stack(
         &self,
         _block: BlockRef,
+        _level: &dyn LevelReader,
+        _pos: BlockPos,
         _state: BlockStateId,
         _include_data: bool,
     ) -> Option<ItemStack> {

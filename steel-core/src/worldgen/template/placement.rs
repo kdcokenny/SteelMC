@@ -749,5 +749,6 @@ impl StructureTemplate {
             || key == &vanilla_block_entity_types::HOPPER.key
             || key == &vanilla_block_entity_types::SHULKER_BOX.key
             || key == &vanilla_block_entity_types::CRAFTER.key
+            || key == &vanilla_block_entity_types::DECORATED_POT.key
     }
 }

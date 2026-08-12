@@ -169,6 +169,8 @@ impl BlockBehavior for StemBlock {
     fn get_clone_item_stack(
         &self,
         _block: BlockRef,
+        _level: &dyn LevelReader,
+        _pos: BlockPos,
         _state: BlockStateId,
         _include_data: bool,
     ) -> Option<ItemStack> {
@@ -445,9 +447,12 @@ mod tests {
     #[test]
     fn clone_items_match_each_stem_family() {
         init_vanilla_registry();
+        let level = TestLevel::default();
         let pumpkin = pumpkin_stem()
             .get_clone_item_stack(
                 &vanilla_blocks::PUMPKIN_STEM,
+                &level,
+                BlockPos::ZERO,
                 vanilla_blocks::PUMPKIN_STEM.default_state(),
                 false,
             )
@@ -455,6 +460,8 @@ mod tests {
         let melon = melon_stem()
             .get_clone_item_stack(
                 &vanilla_blocks::MELON_STEM,
+                &level,
+                BlockPos::ZERO,
                 vanilla_blocks::MELON_STEM.default_state(),
                 false,
             )

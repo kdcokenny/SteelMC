@@ -64,6 +64,7 @@ pub type BlockCollisionBoxes = SmallVec<[BlockLocalAabb; 4]>;
 pub struct BlockLootContext<'a> {
     world: &'a Arc<World>,
     pos: BlockPos,
+    block_entity: Option<&'a SharedBlockEntity>,
     entity: Option<&'a dyn Entity>,
     tool: Option<&'a ItemStack>,
     luck: f32,
@@ -76,10 +77,18 @@ impl<'a> BlockLootContext<'a> {
         Self {
             world,
             pos,
+            block_entity: None,
             entity: None,
             tool: None,
             luck: 0.0,
         }
+    }
+
+    /// Adds the block entity captured before the block was removed.
+    #[must_use]
+    pub const fn with_block_entity(mut self, block_entity: Option<&'a SharedBlockEntity>) -> Self {
+        self.block_entity = block_entity;
+        self
     }
 
     /// Adds the entity responsible for destroying the block.
@@ -123,6 +132,10 @@ impl<'a> BlockLootContext<'a> {
 
     pub(crate) const fn entity(&self) -> Option<&'a dyn Entity> {
         self.entity
+    }
+
+    pub(crate) const fn block_entity(&self) -> Option<&'a SharedBlockEntity> {
+        self.block_entity
     }
 
     pub(crate) const fn tool(&self) -> Option<&'a ItemStack> {

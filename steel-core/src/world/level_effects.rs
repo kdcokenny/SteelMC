@@ -6,6 +6,7 @@ use super::{
     UpdateFlags, World, WorldEntityManager, entity_loot_ref, fluid_state_to_block, level_events,
     vanilla_blocks, vanilla_game_events,
 };
+use crate::block_entity::SharedBlockEntity;
 
 pub(super) fn sound_is_within_range(
     sound: SoundEventRef,
@@ -283,8 +284,8 @@ impl World {
         }
 
         if drop_items {
-            self.drop_resources_with_entity(state, pos, entity);
-            // TODO: block entity drops
+            let block_entity = self.get_block_entity(pos);
+            self.drop_resources_with_context(state, pos, block_entity.as_ref(), entity);
         }
 
         // Vanilla parity: fluidState.createLegacyBlock() — breaking a waterlogged
@@ -307,7 +308,6 @@ impl World {
     /// This is the no-tool/no-entity overload. Player block breaking uses
     /// `block_breaking::drop_block_loot` which includes tool context for
     /// fortune/silk touch.
-    // TODO: block entity and entity drops
     pub fn drop_resources(self: &Arc<Self>, state: BlockStateId, pos: BlockPos) {
         self.drop_resources_with_entity(state, pos, None);
     }
@@ -318,7 +318,20 @@ impl World {
         pos: BlockPos,
         entity: Option<&dyn Entity>,
     ) {
-        let context = BlockLootContext::new(self, pos).with_entity(entity);
+        let block_entity = self.get_block_entity(pos);
+        self.drop_resources_with_context(state, pos, block_entity.as_ref(), entity);
+    }
+
+    fn drop_resources_with_context(
+        self: &Arc<Self>,
+        state: BlockStateId,
+        pos: BlockPos,
+        block_entity: Option<&SharedBlockEntity>,
+        entity: Option<&dyn Entity>,
+    ) {
+        let context = BlockLootContext::new(self, pos)
+            .with_block_entity(block_entity)
+            .with_entity(entity);
         for item in context.get_drops(state) {
             if !item.is_empty() {
                 self.pop_resource(pos, item);

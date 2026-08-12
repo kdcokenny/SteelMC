@@ -162,6 +162,8 @@ impl BlockBehavior for CaveVinesBlock {
     fn get_clone_item_stack(
         &self,
         _block: BlockRef,
+        _level: &dyn LevelReader,
+        _pos: BlockPos,
         _state: BlockStateId,
         _include_data: bool,
     ) -> Option<ItemStack> {
@@ -254,6 +256,8 @@ mod tests {
         let item = behavior
             .get_clone_item_stack(
                 &vanilla_blocks::CAVE_VINES,
+                &TestLevel::default(),
+                BlockPos::ZERO,
                 vanilla_blocks::CAVE_VINES.default_state(),
                 false,
             )

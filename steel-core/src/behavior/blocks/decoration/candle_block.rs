@@ -143,7 +143,7 @@ impl BlockBehavior for CandleBlock {
         }
 
         if self
-            .get_clone_item_stack(self.block, state, false)
+            .get_clone_item_stack(self.block, world.as_ref(), pos, state, false)
             .is_some_and(|it| inv.with_item(|item_stack| it.is(item_stack.item)))
         {
             let candles_amount = state.get_value(&CANDLES_PROPERTY);

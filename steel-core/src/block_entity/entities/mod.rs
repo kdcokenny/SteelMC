@@ -5,6 +5,7 @@ mod beehive;
 mod brushable;
 mod comparator;
 mod daylight_detector;
+mod decorated_pot;
 mod end_gateway;
 mod end_portal;
 mod piston_moving;
@@ -19,6 +20,8 @@ pub use beehive::{
 pub use brushable::BrushableBlockEntity;
 pub use comparator::ComparatorBlockEntity;
 pub use daylight_detector::DaylightDetectorBlockEntity;
+pub(crate) use decorated_pot::DecoratedPotContainer;
+pub use decorated_pot::{DecoratedPotBlockEntity, WobbleStyle};
 pub use end_gateway::EndGatewayBlockEntity;
 pub use end_portal::EndPortalBlockEntity;
 pub use piston_moving::PistonMovingBlockEntity;

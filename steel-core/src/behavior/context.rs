@@ -596,6 +596,14 @@ impl InventoryAccess {
         f(&mut inventory)
     }
 
+    /// Returns the player's independently lockable inventory capability.
+    ///
+    /// This is restricted to crate internals for interactions that must update a
+    /// held stack and another container in one deterministic lock boundary.
+    pub(crate) fn container_ref(&self) -> ContainerRef {
+        ContainerRef::from(Arc::clone(&self.inventory))
+    }
+
     /// Runs `f` with a container guard containing the player's inventory.
     ///
     /// Prefer [`Self::with_item`] or [`Self::with_inventory`] unless an operation

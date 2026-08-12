@@ -17,8 +17,9 @@ use steel_utils::{BlockPos, BlockStateId};
 use super::SharedBlockEntity;
 use super::entities::{
     BarrelBlockEntity, BeehiveBlockEntity, BrushableBlockEntity, ComparatorBlockEntity,
-    DaylightDetectorBlockEntity, EndGatewayBlockEntity, EndPortalBlockEntity,
-    PistonMovingBlockEntity, PotentSulfurBlockEntity, RawBlockEntity, SignBlockEntity,
+    DaylightDetectorBlockEntity, DecoratedPotBlockEntity, EndGatewayBlockEntity,
+    EndPortalBlockEntity, PistonMovingBlockEntity, PotentSulfurBlockEntity, RawBlockEntity,
+    SignBlockEntity,
 };
 use crate::world::World;
 
@@ -236,6 +237,11 @@ pub fn init_block_entities() {
         registry.register(
             &vanilla_block_entity_types::DAYLIGHT_DETECTOR,
             |level, pos, state| Arc::new(DaylightDetectorBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::DECORATED_POT,
+            |level, pos, state| Arc::new(DecoratedPotBlockEntity::new(level, pos, state)),
         );
 
         registry.register(&vanilla_block_entity_types::PISTON, |level, pos, state| {

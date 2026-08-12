@@ -18,6 +18,7 @@ use steel_registry::fluid::{FluidRef, FluidState};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::loot_table::{LootContext, LootTableRef};
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::sound_types::SoundType;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entities;
 use steel_registry::{REGISTRY, RegistryEntry, RegistryExt, sound_events, vanilla_blocks};
@@ -256,6 +257,14 @@ pub trait BlockBehavior: Send + Sync {
         source: &PlacementSource<'_>,
     ) {
         // Default: no-op
+    }
+
+    /// Returns the sound type for this block state.
+    ///
+    /// Vanilla parity: `BlockBehaviour.getSoundType(BlockState)`. Most blocks use
+    /// their extracted static sound type; state-dependent blocks override this.
+    fn get_sound_type(&self, state: BlockStateId) -> SoundType {
+        state.get_block().config.sound_type
     }
 
     /// Called when a player starts attacking this block.
@@ -553,6 +562,8 @@ pub trait BlockBehavior: Send + Sync {
     ///
     /// # Arguments
     /// * `block` - The block being picked
+    /// * `_level` - The level containing the block
+    /// * `_pos` - The position of the block
     /// * `_state` - The block state (some blocks vary pick item based on state)
     /// * `_include_data` - Whether to include block entity data (creative + Ctrl)
     #[expect(
@@ -562,6 +573,8 @@ pub trait BlockBehavior: Send + Sync {
     fn get_clone_item_stack(
         &self,
         block: BlockRef,
+        _level: &dyn LevelReader,
+        _pos: BlockPos,
         state: BlockStateId,
         include_data: bool,
     ) -> Option<ItemStack> {

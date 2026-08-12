@@ -3,7 +3,7 @@ use std::slice;
 use super::*;
 use steel_registry::blocks::properties::{DoorHingeSide, SlabType};
 use steel_registry::init_vanilla_registry;
-use steel_registry::vanilla_entities;
+use steel_registry::{vanilla_entities, vanilla_loot_tables};
 
 fn test_registry() -> Registry {
     init_vanilla_registry();
@@ -200,6 +200,28 @@ fn brushable_append_loot_infers_block_entity_without_container_reseed() {
     assert!(StructureTemplate::should_reseed_template_loot(
         Some(chest_type),
         &chest_nbt
+    ));
+
+    let mut pot_nbt = NbtCompound::new();
+    pot_nbt.insert("id", "minecraft:decorated_pot");
+    pot_nbt.insert(
+        "LootTable",
+        vanilla_loot_tables::POTS_TRIAL_CHAMBERS_CORRIDOR
+            .key
+            .to_string(),
+    );
+    let pot_type = StructureTemplate::block_entity_type_for_nbt_or_state(
+        &registry,
+        registry
+            .blocks
+            .get_default_state_id(&vanilla_blocks::DECORATED_POT),
+        &pot_nbt,
+    )
+    .expect("decorated pot nbt should resolve its block entity type");
+
+    assert!(StructureTemplate::should_reseed_template_loot(
+        Some(pot_type),
+        &pot_nbt
     ));
 }
 

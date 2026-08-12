@@ -87,6 +87,8 @@ impl BlockBehavior for AttachedStemBlock {
     fn get_clone_item_stack(
         &self,
         _block: BlockRef,
+        _level: &dyn LevelReader,
+        _pos: BlockPos,
         _state: BlockStateId,
         _include_data: bool,
     ) -> Option<ItemStack> {
@@ -229,7 +231,7 @@ mod tests {
             assert_eq!(reverted.get_value(&AGE), MAX_AGE);
 
             let clone = behavior
-                .get_clone_item_stack(attached_block, attached, false)
+                .get_clone_item_stack(attached_block, &level, pos, attached, false)
                 .expect("attached stem has a clone item");
             assert_eq!(clone.item(), seed);
         }
