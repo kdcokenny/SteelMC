@@ -7,7 +7,10 @@ use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::biome::BiomeRef;
-use steel_registry::data_components::vanilla_components::DYE;
+use steel_registry::data_components::vanilla_components::{DYE, SHEEP_COLOR};
+use steel_registry::data_components::{
+    ComponentData, ComponentEntryRef, DataComponentGetter, DataComponentValue,
+};
 use steel_registry::entity_type::{
     EntityAttachmentPoint, EntityAttachments, EntityDimensions, EntityTypeRef,
 };
@@ -361,6 +364,10 @@ impl Entity for SheepEntity {
         self.entity_type
     }
 
+    fn data_component_getter(&self) -> Option<&dyn DataComponentGetter> {
+        Some(self)
+    }
+
     fn base_tick(&self) {
         Mob::base_tick_mob(self);
     }
@@ -437,8 +444,8 @@ impl LivingEntity for SheepEntity {
         Some(&sound_events::ENTITY_SHEEP_DEATH)
     }
 
-    fn sheep_loot_state(&self) -> Option<(DyeColor, bool)> {
-        Some((self.color(), self.is_sheared()))
+    fn sheep_sheared(&self) -> Option<bool> {
+        Some(self.is_sheared())
     }
 
     fn server_ai_step(&self) {
@@ -451,6 +458,13 @@ impl LivingEntity for SheepEntity {
         AgeableMob::tick_ageable_mob(self);
         Animal::tick_animal_love(self);
         result
+    }
+}
+
+impl DataComponentGetter for SheepEntity {
+    fn get_data_component(&self, component: ComponentEntryRef) -> Option<DataComponentValue<'_>> {
+        (component.key == *SHEEP_COLOR.key())
+            .then(|| DataComponentValue::Owned(ComponentData::new(self.color())))
     }
 }
 

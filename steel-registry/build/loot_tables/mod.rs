@@ -1,6 +1,6 @@
 //! Build script for generating vanilla loot table definitions.
 
-use std::{fs, path::Path, str::FromStr};
+use std::{collections::BTreeMap, fs, path::Path, str::FromStr};
 
 use heck::{ToShoutySnakeCase, ToSnakeCase};
 use proc_macro2::{Ident, Span, TokenStream};
@@ -285,20 +285,13 @@ struct EntityPredicateJson {
     flags: Option<EntityFlagsJson>,
     #[serde(alias = "minecraft:equipment", default)]
     equipment: Option<EntityEquipmentJson>,
-    /// Entity data components (`minecraft:components`). Only `sheep/color` is modeled.
+    /// Exact entity data-component values (`minecraft:components`).
     #[serde(rename = "minecraft:components", default)]
-    components: Option<EntityComponentsJson>,
+    components: Option<BTreeMap<String, serde_json::Value>>,
     /// Type-specific predicates. `minecraft:type_specific/sheep` is a single
     /// registry-style flat key, not a nested object.
     #[serde(rename = "minecraft:type_specific/sheep", default)]
     sheep_type_specific: Option<SheepTypeSpecificJson>,
-}
-
-/// Entity data-component predicates (`minecraft:components`).
-#[derive(Deserialize, Debug, Clone)]
-struct EntityComponentsJson {
-    #[serde(rename = "minecraft:sheep/color", default)]
-    sheep_color: Option<String>,
 }
 
 /// Type-specific entity predicates (`minecraft:type_specific/sheep`).
@@ -561,11 +554,12 @@ pub(crate) fn build() -> TokenStream {
     stream.extend(quote! {
         use crate::loot_table::{
             BlockPredicate, BonusFormula, ConditionalLootFunction, CopySource, DamageSourcePredicate,
-            DamageTagPredicate, DyeColor, EnchantedChance, EnchantmentOptions, EntityEquipment,
-            EntityFlags, EntityPredicate, EquipmentSlotGroup, InstrumentOptions, LocationPredicate,
-            LootCondition, LootContextEntity, LootEntry, LootFunction, LootPool, LootTable,
-            LootTableRef, LootTableRegistry, LootType, NameTarget, NumberProvider, PropertyCheck,
-            StewEffect, ToolPredicate,
+            DamageTagPredicate, EnchantedChance, EnchantmentOptions, EntityEquipment,
+            EntityExactDataComponentsPredicate, EntityFlags, EntityPredicate, EquipmentSlotGroup,
+            InstrumentOptions, LocationPredicate, LootCondition, LootContextEntity, LootEntry,
+            LootFunction, LootPool, LootTable, LootTableRef, LootTableRegistry, LootType,
+            NameTarget, NumberProvider, PropertyCheck, SerializedEntityDataComponent, StewEffect,
+            ToolPredicate,
         };
         use steel_utils::Identifier;
     });

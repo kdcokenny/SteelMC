@@ -37,7 +37,10 @@ use crate::entity::{
     Entity, EntityBase, PendingWorldChangeToken, RemovalReason, SharedEntity, change_entity_world,
 };
 
-use crate::chunk_saver::{ChunkStorage, PersistentEntity, registry::WorldStorageRegistry};
+use crate::chunk_saver::{
+    ChunkStorage, PersistentEntity,
+    registry::{WorldStorageOutput, WorldStorageRegistry},
+};
 use crate::level_data::{LevelDataManager, RespawnData, WorldGenerationSettings};
 use crate::permission::{
     OP_GROUP, PermissionGroupManager, PermissionGroupManagerError, PermissionGroupUpdateError,
@@ -60,6 +63,7 @@ use crate::portal::{
     PortalKind, TeleportPostTransition, TeleportTransition, WorldChangeRequest, end_gateway,
     end_portal, nether_portal,
 };
+use crate::random_sequences::RandomSequences;
 use crate::scoreboard::DomainScoreboards;
 use crate::server::jobs::{FnServerJob, ServerJobContext, ServerJobQueue};
 use crate::server::packet_processor::PacketProcessor;
@@ -614,7 +618,15 @@ impl Server {
             &resolved_worlds.worlds,
         );
 
-        for world_entry in &resolved_worlds.worlds {
+        let mut domain_random_sequences = FxHashMap::default();
+        let mut prepared_default_worlds: FxHashMap<Identifier, (WorldStorageOutput, i64)> =
+            FxHashMap::default();
+        for domain in &resolved_worlds.domains {
+            let world_entry = resolved_worlds
+                .worlds
+                .iter()
+                .find(|world| world.key == domain.default_world)
+                .ok_or_else(|| format!("domain {} has no configured default world", domain.name))?;
             let default_world_path = resolved_worlds
                 .save_path
                 .join(&world_entry.domain)
@@ -638,6 +650,51 @@ impl Server {
                     world_entry.key
                 )
             })?;
+            let random_sequences =
+                RandomSequences::load(storage_output.level_data_path.as_deref(), world_seed)
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "failed to load random sequences for domain {}: {e}",
+                            domain.name
+                        )
+                    })?;
+            domain_random_sequences.insert(domain.name.clone(), Arc::new(random_sequences));
+            prepared_default_worlds.insert(world_entry.key.clone(), (storage_output, world_seed));
+        }
+
+        for world_entry in &resolved_worlds.worlds {
+            let default_world_path = resolved_worlds
+                .save_path
+                .join(&world_entry.domain)
+                .join("worlds")
+                .join(&world_entry.name);
+            let (storage_output, world_seed) =
+                if let Some(prepared) = prepared_default_worlds.remove(&world_entry.key) {
+                    prepared
+                } else {
+                    let storage_output = storage_registry
+                        .create(
+                            &world_entry.storage,
+                            &resolved_worlds.save_path,
+                            Path::new(&default_world_path),
+                        )
+                        .map_err(|e| {
+                            format!("failed to create storage for {}: {e}", world_entry.key)
+                        })?;
+                    let world_seed = LevelDataManager::load_seed_or_default(
+                        storage_output.level_data_path.as_deref(),
+                        world_entry.seed,
+                    )
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "failed to load level data seed for {}: {e}",
+                            world_entry.key
+                        )
+                    })?;
+                    (storage_output, world_seed)
+                };
             let generator_output = generator_registry
                 .create(
                     storage_output.level_data_path.as_deref(),
@@ -670,6 +727,13 @@ impl Server {
                 },
                 generation_pool.clone(),
                 Arc::clone(&chunk_encoding_pool),
+                Arc::clone(
+                    domain_random_sequences
+                        .get(&world_entry.domain)
+                        .ok_or_else(|| {
+                            format!("domain {} has no random-sequence state", world_entry.domain)
+                        })?,
+                ),
             )
             .await
             .map_err(|e| format!("failed to create world {}: {e}", world_entry.key))?;

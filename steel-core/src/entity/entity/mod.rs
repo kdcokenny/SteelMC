@@ -66,6 +66,11 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     /// Gets the entity type containing tracking range, dimensions, etc.
     fn entity_type(&self) -> EntityTypeRef;
 
+    /// Exposes Vanilla entity data components to exact predicates.
+    fn data_component_getter(&self) -> Option<&dyn DataComponentGetter> {
+        None
+    }
+
     /// Returns whether this entity ignores chunk ticking visibility.
     ///
     /// Mirrors vanilla `Entity.isAlwaysTicking`.

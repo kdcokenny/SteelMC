@@ -1,5 +1,3 @@
-use steel_registry::DyeColor;
-
 use super::*;
 
 /// A trait for living entities that can take damage, heal, and die.
@@ -284,12 +282,8 @@ pub trait LivingEntity: Entity {
         self.as_ageable_mob().is_some_and(AgeableMob::is_baby)
     }
 
-    /// Returns the vanilla sheep loot predicate state (`minecraft:components.sheep/color`
-    /// together with `minecraft:type_specific/sheep.sheared`), when this entity is a sheep.
-    ///
-    /// Mirrors `Sheep.get(DataComponents.SHEEP_COLOR)` + `Sheep.isSheared()` for the
-    /// entity loot context.
-    fn sheep_loot_state(&self) -> Option<(DyeColor, bool)> {
+    /// Returns Vanilla `minecraft:type_specific/sheep.sheared`, when this is a sheep.
+    fn sheep_sheared(&self) -> Option<bool> {
         None
     }
 
@@ -978,6 +972,29 @@ pub trait LivingEntity: Entity {
     /// Returns vanilla `Entity.getLootTableSeed` for death loot.
     fn death_loot_table_seed(&self) -> i64 {
         self.as_mob().map_or(0, Mob::death_loot_table_seed)
+    }
+
+    /// Runs Vanilla `LivingEntity.dropFromGiftLootTable`.
+    ///
+    /// Returns `false` when the table produced no stacks. Otherwise the consumer
+    /// receives every returned stack exactly once and the method returns `true`.
+    #[must_use]
+    fn drop_from_gift_loot_table(
+        &self,
+        loot_table: LootTableRef,
+        consumer: &mut dyn FnMut(&World, ItemStack),
+    ) -> bool {
+        let Some(world) = self.level() else {
+            return false;
+        };
+        let drops = gift_loot_items(self, loot_table, world.as_ref());
+        if drops.is_empty() {
+            return false;
+        }
+        for item_stack in drops {
+            consumer(world.as_ref(), item_stack);
+        }
+        true
     }
 
     /// Runs vanilla `LivingEntity.dropFromLootTable`.
@@ -2946,8 +2963,7 @@ fn death_loot_items_with_rng<R: rand::Rng, E: LivingEntity + ?Sized>(
     loot_table.get_random_items(&mut context)
 }
 
-fn living_entity_loot_ref<E: LivingEntity + ?Sized>(entity: &E) -> EntityRef<'_> {
-    let sheep = entity.sheep_loot_state();
+pub(crate) fn living_entity_loot_ref<E: LivingEntity + ?Sized>(entity: &E) -> EntityRef<'_> {
     EntityRef {
         entity_type: Some(&entity.entity_type().key),
         flags: EntityRefFlags {
@@ -2960,9 +2976,47 @@ fn living_entity_loot_ref<E: LivingEntity + ?Sized>(entity: &E) -> EntityRef<'_>
         // TODO: Include equipment and custom name once loot contexts can snapshot entity data.
         equipment: None,
         custom_name: None,
-        sheep_color: sheep.map(|(color, _)| color),
-        sheep_sheared: sheep.map(|(_, sheared)| sheared),
+        components: Entity::data_component_getter(entity),
+        sheep_sheared: entity.sheep_sheared(),
     }
+}
+
+fn gift_loot_items<E: LivingEntity + ?Sized>(
+    entity: &E,
+    loot_table: LootTableRef,
+    world: &World,
+) -> Vec<ItemStack> {
+    if let Some(random_sequence) = loot_table.random_sequence.as_ref() {
+        world.with_random_sequence(random_sequence, |random| {
+            let mut random = SteelLootRandom::new(random);
+            gift_loot_items_with_rng(entity, loot_table, &mut random)
+        })
+    } else {
+        world.with_level_random(|random| {
+            let mut random = SteelLootRandom::new(random);
+            gift_loot_items_with_rng(entity, loot_table, &mut random)
+        })
+    }
+}
+
+fn gift_loot_items_with_rng<R: LootRandom, E: LivingEntity + ?Sized>(
+    entity: &E,
+    loot_table: LootTableRef,
+    rng: &mut R,
+) -> Vec<ItemStack> {
+    let mut context = gift_loot_context(entity, rng);
+    loot_table.get_random_items(&mut context)
+}
+
+fn gift_loot_context<'a, R: LootRandom, E: LivingEntity + ?Sized>(
+    entity: &'a E,
+    rng: &'a mut R,
+) -> LootContext<'a, R> {
+    let position = entity.position();
+    LootContext::new(rng)
+        .with_loot_type(LootType::Gift)
+        .with_origin(position.x, position.y, position.z)
+        .with_this_entity(living_entity_loot_ref(entity))
 }
 
 /// Runs vanilla `LivingEntity.dropFromShearingLootTable` for `loot_table`, returning the
@@ -2982,4 +3036,198 @@ pub(crate) fn shearing_loot_items_with_rng<R: rand::Rng, E: LivingEntity + ?Size
         context = context.with_game_time(level.game_time());
     }
     loot_table.get_random_items(&mut context)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ptr;
+
+    use steel_registry::loot_table::{LootEntry, LootPool, LootTable, NumberProvider};
+    use steel_registry::{init_vanilla_registry, vanilla_entities, vanilla_items};
+    use steel_utils::random::Random;
+
+    use super::*;
+    use crate::entity::entities::PigEntity;
+    use crate::test_support::fresh_test_world;
+
+    const GIFT_ENTITY_ID: i32 = 1;
+    const GIFT_ORIGIN: DVec3 = DVec3::new(12.5, 70.0, -8.25);
+    const ONE_ROLL: f32 = 1.0;
+    const UNIT_WEIGHT: i32 = 1;
+    const DEFAULT_QUALITY: i32 = 0;
+
+    static EMPTY_GIFT_TABLE: LootTable = LootTable {
+        key: Identifier::vanilla_static("test/empty_gift"),
+        loot_type: LootType::Gift,
+        pools: &[],
+        functions: &[],
+        random_sequence: Some(Identifier::vanilla_static("test/empty_gift")),
+    };
+
+    static STONE_GIFT_ENTRIES: &[LootEntry] = &[LootEntry::Item {
+        name: Identifier::vanilla_static("stone"),
+        weight: UNIT_WEIGHT,
+        quality: DEFAULT_QUALITY,
+        conditions: &[],
+        functions: &[],
+    }];
+    static DIRT_GIFT_ENTRIES: &[LootEntry] = &[LootEntry::Item {
+        name: Identifier::vanilla_static("dirt"),
+        weight: UNIT_WEIGHT,
+        quality: DEFAULT_QUALITY,
+        conditions: &[],
+        functions: &[],
+    }];
+    static MULTI_STACK_GIFT_POOLS: &[LootPool] = &[
+        LootPool {
+            rolls: NumberProvider::Constant(ONE_ROLL),
+            bonus_rolls: 0.0,
+            entries: STONE_GIFT_ENTRIES,
+            conditions: &[],
+            functions: &[],
+        },
+        LootPool {
+            rolls: NumberProvider::Constant(ONE_ROLL),
+            bonus_rolls: 0.0,
+            entries: DIRT_GIFT_ENTRIES,
+            conditions: &[],
+            functions: &[],
+        },
+    ];
+    static MULTI_STACK_GIFT_TABLE: LootTable = LootTable {
+        key: Identifier::vanilla_static("test/multi_stack_gift"),
+        loot_type: LootType::Gift,
+        pools: MULTI_STACK_GIFT_POOLS,
+        functions: &[],
+        random_sequence: Some(Identifier::vanilla_static("test/multi_stack_gift")),
+    };
+
+    static RANDOM_GIFT_ENTRIES: &[LootEntry] = &[
+        LootEntry::Item {
+            name: Identifier::vanilla_static("stone"),
+            weight: UNIT_WEIGHT,
+            quality: DEFAULT_QUALITY,
+            conditions: &[],
+            functions: &[],
+        },
+        LootEntry::Item {
+            name: Identifier::vanilla_static("dirt"),
+            weight: UNIT_WEIGHT,
+            quality: DEFAULT_QUALITY,
+            conditions: &[],
+            functions: &[],
+        },
+    ];
+    static RANDOM_GIFT_POOLS: &[LootPool] = &[LootPool {
+        rolls: NumberProvider::Constant(ONE_ROLL),
+        bonus_rolls: 0.0,
+        entries: RANDOM_GIFT_ENTRIES,
+        conditions: &[],
+        functions: &[],
+    }];
+    static NAMED_RANDOM_GIFT_TABLE: LootTable = LootTable {
+        key: Identifier::vanilla_static("test/named_random_gift"),
+        loot_type: LootType::Gift,
+        pools: RANDOM_GIFT_POOLS,
+        functions: &[],
+        random_sequence: Some(Identifier::vanilla_static("test/named_random_gift")),
+    };
+
+    fn attached_pig(world: &Arc<World>) -> PigEntity {
+        PigEntity::new(
+            &vanilla_entities::PIG,
+            GIFT_ENTITY_ID,
+            GIFT_ORIGIN,
+            Arc::downgrade(world),
+        )
+    }
+
+    #[test]
+    fn gift_context_contains_gift_type_origin_and_this_entity() {
+        init_vanilla_registry();
+        let world = fresh_test_world("gift_context");
+        let pig = attached_pig(&world);
+        let mut rng = rand::rng();
+        let context = gift_loot_context(&pig, &mut rng);
+        let Some(this_entity) = context.this_entity else {
+            panic!("gift context should contain this entity");
+        };
+
+        assert_eq!(context.loot_type, Some(LootType::Gift));
+        assert_eq!(context.origin, Some(GIFT_ORIGIN.into()));
+        assert_eq!(this_entity.entity_type, Some(&vanilla_entities::PIG.key));
+    }
+
+    #[test]
+    fn gift_drop_returns_false_without_calling_consumer_for_empty_table() {
+        init_vanilla_registry();
+        let world = fresh_test_world("empty_gift");
+        let pig = attached_pig(&world);
+        let mut consumer_calls = 0;
+
+        let dropped = pig.drop_from_gift_loot_table(&EMPTY_GIFT_TABLE, &mut |_, _| {
+            consumer_calls += 1;
+        });
+
+        assert!(!dropped);
+        assert_eq!(consumer_calls, 0);
+    }
+
+    #[test]
+    fn gift_drop_returns_true_and_calls_consumer_for_every_stack() {
+        init_vanilla_registry();
+        let world = fresh_test_world("multi_stack_gift");
+        let pig = attached_pig(&world);
+        let mut consumed = Vec::new();
+
+        let dropped =
+            pig.drop_from_gift_loot_table(&MULTI_STACK_GIFT_TABLE, &mut |level, stack| {
+                consumed.push((ptr::eq(level, world.as_ref()), stack.item));
+            });
+
+        assert!(dropped);
+        assert_eq!(
+            consumed,
+            [
+                (true, &*vanilla_items::STONE),
+                (true, &*vanilla_items::DIRT),
+            ]
+        );
+    }
+
+    #[test]
+    fn gift_drop_uses_the_loot_tables_named_random_sequence() {
+        init_vanilla_registry();
+        let actual_world = fresh_test_world("named_gift_actual");
+        let control_world = fresh_test_world("named_gift_control");
+        let actual_pig = attached_pig(&actual_world);
+        let control_pig = attached_pig(&control_world);
+        let Some(sequence) = NAMED_RANDOM_GIFT_TABLE.random_sequence.as_ref() else {
+            panic!("test table should name its random sequence");
+        };
+        let expected = control_world.with_random_sequence(sequence, |random| {
+            let mut random = SteelLootRandom::new(random);
+            gift_loot_items_with_rng(&control_pig, &NAMED_RANDOM_GIFT_TABLE, &mut random)
+        });
+        let mut actual = Vec::new();
+
+        assert!(
+            actual_pig.drop_from_gift_loot_table(&NAMED_RANDOM_GIFT_TABLE, &mut |_, stack| actual
+                .push(stack),)
+        );
+
+        assert_eq!(
+            actual
+                .iter()
+                .map(|stack| &stack.item.key)
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|stack| &stack.item.key)
+                .collect::<Vec<_>>()
+        );
+        let actual_next = actual_world.with_random_sequence(sequence, Random::next_i64);
+        let expected_next = control_world.with_random_sequence(sequence, Random::next_i64);
+        assert_eq!(actual_next, expected_next);
+    }
 }

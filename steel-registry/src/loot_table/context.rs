@@ -1,4 +1,100 @@
-use super::{BlockStateId, DyeColor, Identifier, ItemStack, RngExt};
+use std::fmt::{self, Debug, Formatter};
+
+use super::{BlockStateId, Identifier, ItemStack};
+use crate::data_components::DataComponentGetter;
+use steel_utils::random::Random;
+
+const FLOAT_RANDOM_BITS: u32 = 24;
+const NONNEGATIVE_I32_RANDOM_BITS: u32 = i32::BITS - 1;
+const DOUBLE_UPPER_RANDOM_BITS: u32 = 26;
+const DOUBLE_LOWER_RANDOM_BITS: u32 = 27;
+const DOUBLE_RANDOM_BITS: u32 = DOUBLE_UPPER_RANDOM_BITS + DOUBLE_LOWER_RANDOM_BITS;
+
+/// Random primitives used by loot evaluation.
+pub trait LootRandom {
+    /// Matches `RandomSource.nextInt(bound)`.
+    fn next_loot_i32_bounded(&mut self, bound: i32) -> i32;
+
+    /// Matches `Mth.nextInt(random, min, max)`.
+    fn next_loot_i32_inclusive(&mut self, min: i32, max: i32) -> i32 {
+        if min >= max {
+            min
+        } else {
+            self.next_loot_i32_bounded(max.wrapping_sub(min).wrapping_add(1)) + min
+        }
+    }
+
+    /// Matches `RandomSource.nextFloat()`.
+    fn next_loot_f32(&mut self) -> f32;
+
+    /// Matches `RandomSource.nextDouble()`.
+    fn next_loot_f64(&mut self) -> f64;
+
+    /// Matches `RandomSource.nextBoolean()`.
+    fn next_loot_bool(&mut self) -> bool;
+}
+
+/// Adapts a Steel `RandomSource` without changing its bit consumption.
+pub struct SteelLootRandom<'a, R: ?Sized>(&'a mut R);
+
+impl<'a, R: Random + ?Sized> SteelLootRandom<'a, R> {
+    #[must_use]
+    pub const fn new(random: &'a mut R) -> Self {
+        Self(random)
+    }
+}
+
+impl<R: Random + ?Sized> LootRandom for SteelLootRandom<'_, R> {
+    fn next_loot_i32_bounded(&mut self, bound: i32) -> i32 {
+        self.0.next_i32_bounded(bound)
+    }
+
+    fn next_loot_f32(&mut self) -> f32 {
+        self.0.next_f32()
+    }
+
+    fn next_loot_f64(&mut self) -> f64 {
+        self.0.next_f64()
+    }
+
+    fn next_loot_bool(&mut self) -> bool {
+        self.0.next_bool()
+    }
+}
+
+impl<R: rand::Rng + ?Sized> LootRandom for R {
+    fn next_loot_i32_bounded(&mut self, bound: i32) -> i32 {
+        assert!(bound > 0, "loot random bound must be positive");
+        let bound_minus_one = bound - 1;
+        if bound & bound_minus_one == 0 {
+            let sample = self.next_u32() >> (u32::BITS - NONNEGATIVE_I32_RANDOM_BITS);
+            return ((i64::from(bound) * i64::from(sample)) >> NONNEGATIVE_I32_RANDOM_BITS) as i32;
+        }
+        loop {
+            let sample = (self.next_u32() >> (u32::BITS - NONNEGATIVE_I32_RANDOM_BITS)) as i32;
+            let modulo = sample % bound;
+            if sample.wrapping_sub(modulo).wrapping_add(bound_minus_one) >= 0 {
+                return modulo;
+            }
+        }
+    }
+
+    fn next_loot_f32(&mut self) -> f32 {
+        let value = self.next_u32() >> (u32::BITS - FLOAT_RANDOM_BITS);
+        value as f32 * (1.0 / (1_u32 << FLOAT_RANDOM_BITS) as f32)
+    }
+
+    fn next_loot_f64(&mut self) -> f64 {
+        let upper = u64::from(self.next_u32() >> (u32::BITS - DOUBLE_UPPER_RANDOM_BITS));
+        let lower = u64::from(self.next_u32() >> (u32::BITS - DOUBLE_LOWER_RANDOM_BITS));
+        let value = (upper << DOUBLE_LOWER_RANDOM_BITS) + lower;
+        value as f64 * (1.0 / (1_u64 << DOUBLE_RANDOM_BITS) as f64)
+    }
+
+    fn next_loot_bool(&mut self) -> bool {
+        self.next_u32() >> (u32::BITS - 1) != 0
+    }
+}
 
 /// Entity target for loot context lookups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,14 +175,20 @@ pub enum ScoreboardTarget {
 
 impl NumberProvider {
     /// Get a value from this provider using the given RNG.
-    pub fn get<R: rand::Rng>(&self, rng: &mut R, ctx: Option<&LootContextRef<'_>>) -> f32 {
+    pub fn get<R: LootRandom>(&self, rng: &mut R, ctx: Option<&LootContextRef<'_>>) -> f32 {
         match self {
             Self::Constant(v) => *v,
-            Self::Uniform { min, max } => rng.random_range(*min..=*max),
+            Self::Uniform { min, max } => {
+                if min >= max {
+                    *min
+                } else {
+                    rng.next_loot_f32() * (*max - *min) + *min
+                }
+            }
             Self::Binomial { n, p } => {
                 let mut count = 0;
                 for _ in 0..*n {
-                    if rng.random::<f32>() < *p {
+                    if rng.next_loot_f32() < *p {
                         count += 1;
                     }
                 }
@@ -109,14 +211,20 @@ impl NumberProvider {
     }
 
     /// Get a value without context (for backwards compatibility).
-    pub fn get_simple(&self, rng: &mut impl rand::Rng) -> f32 {
+    pub fn get_simple(&self, rng: &mut impl LootRandom) -> f32 {
         match self {
             Self::Constant(v) => *v,
-            Self::Uniform { min, max } => rng.random_range(*min..=*max),
+            Self::Uniform { min, max } => {
+                if min >= max {
+                    *min
+                } else {
+                    rng.next_loot_f32() * (*max - *min) + *min
+                }
+            }
             Self::Binomial { n, p } => {
                 let mut count = 0;
                 for _ in 0..*n {
-                    if rng.random::<f32>() < *p {
+                    if rng.next_loot_f32() < *p {
                         count += 1;
                     }
                 }
@@ -128,7 +236,7 @@ impl NumberProvider {
     }
 
     /// Get the value as an integer.
-    pub fn get_int(&self, rng: &mut impl rand::Rng) -> i32 {
+    pub fn get_int(&self, rng: &mut impl LootRandom) -> i32 {
         match self {
             Self::Uniform { min, max } => uniform_int(rng, math_round(*min), math_round(*max)),
             other => math_round(other.get_simple(rng)),
@@ -136,7 +244,7 @@ impl NumberProvider {
     }
 
     /// Get the value as an integer with context.
-    pub fn get_int_with_ctx<R: rand::Rng>(
+    pub fn get_int_with_ctx<R: LootRandom>(
         &self,
         rng: &mut R,
         ctx: Option<&LootContextRef<'_>>,
@@ -155,12 +263,8 @@ fn math_round(value: f32) -> i32 {
 
 /// Vanilla `Mth.nextInt(random, min, max)` is inclusive and clamps to `min`
 /// when `min >= max`.
-fn uniform_int(rng: &mut impl rand::Rng, min: i32, max: i32) -> i32 {
-    if min >= max {
-        min
-    } else {
-        rng.random_range(min..=max)
-    }
+fn uniform_int(rng: &mut impl LootRandom, min: i32, max: i32) -> i32 {
+    rng.next_loot_i32_inclusive(min, max)
 }
 
 /// A range for number comparisons (used in `ValueCheck`, `TimeCheck`, `EntityScores`).
@@ -172,7 +276,7 @@ pub struct NumberProviderRange {
 
 impl NumberProviderRange {
     /// Check if a value is within this range.
-    pub fn test(&self, value: f32, rng: &mut impl rand::Rng) -> bool {
+    pub fn test(&self, value: f32, rng: &mut impl LootRandom) -> bool {
         if let Some(min) = &self.min
             && value < min.get_simple(rng)
         {
@@ -233,9 +337,11 @@ pub struct LootContextRef<'a> {
 /// Context for loot table evaluation, containing all relevant game state.
 ///
 /// This mirrors vanilla's `LootContext` / `LootParams` system.
-pub struct LootContext<'a, R: rand::Rng> {
+pub struct LootContext<'a, R: LootRandom> {
     /// Random number generator.
     pub rng: &'a mut R,
+    /// Vanilla loot parameter set used for this evaluation.
+    pub loot_type: Option<LootType>,
     /// Luck value (e.g., from Luck of the Sea enchantment).
     pub luck: f32,
     /// The block state being broken (for block loot tables).
@@ -279,7 +385,7 @@ pub struct WeatherState {
 
 /// A reference to an entity for loot context.
 /// This is intentionally opaque - the actual entity type depends on game implementation.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct EntityRef<'a> {
     /// Type identifier for the entity.
     pub entity_type: Option<&'a Identifier>,
@@ -289,11 +395,25 @@ pub struct EntityRef<'a> {
     pub equipment: Option<&'a EntityEquipmentRef<'a>>,
     /// Entity name (for `copy_name` function).
     pub custom_name: Option<&'a str>,
-    /// Vanilla `minecraft:components.sheep/color` entity data component.
-    pub sheep_color: Option<DyeColor>,
+    /// Vanilla data-component capability used by exact entity predicates.
+    pub components: Option<&'a dyn DataComponentGetter>,
     /// Vanilla `minecraft:type_specific/sheep.sheared`. `None` when the entity is
     /// not a sheep, matching vanilla `SheepPredicate.matches`' non-sheep rejection.
     pub sheep_sheared: Option<bool>,
+}
+
+impl Debug for EntityRef<'_> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EntityRef")
+            .field("entity_type", &self.entity_type)
+            .field("flags", &self.flags)
+            .field("equipment", &self.equipment)
+            .field("custom_name", &self.custom_name)
+            .field("has_components", &self.components.is_some())
+            .field("sheep_sheared", &self.sheep_sheared)
+            .finish()
+    }
 }
 
 /// Entity flags for predicate checking.
@@ -339,11 +459,12 @@ pub struct BlockEntityRef<'a> {
     pub inventory: Option<&'a [ItemStack]>,
 }
 
-impl<'a, R: rand::Rng> LootContext<'a, R> {
+impl<'a, R: LootRandom> LootContext<'a, R> {
     /// Create a new loot context with just an RNG.
     pub const fn new(rng: &'a mut R) -> Self {
         Self {
             rng,
+            loot_type: None,
             luck: 0.0,
             block_state: None,
             tool: None,
@@ -360,6 +481,13 @@ impl<'a, R: rand::Rng> LootContext<'a, R> {
             block_entity: None,
             interacting_entity: None,
         }
+    }
+
+    /// Set the Vanilla loot parameter set used for this evaluation.
+    #[must_use]
+    pub const fn with_loot_type(mut self, loot_type: LootType) -> Self {
+        self.loot_type = Some(loot_type);
+        self
     }
 
     /// Set the luck value.

@@ -1,8 +1,11 @@
+use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
+
 use super::{
-    BlockStateExt, DamageSourceInfo, DyeColor, EntityEquipmentRef, EntityRef, EntityRefFlags,
-    Identifier, ItemStack, LootContext, LootContextEntity, NumberProvider, NumberProviderRange,
-    REGISTRY, RegistryExt, RngExt, TaggedRegistryExt,
+    BlockStateExt, DamageSourceInfo, EntityEquipmentRef, EntityRef, EntityRefFlags, Identifier,
+    ItemStack, LootContext, LootContextEntity, LootRandom, NumberProvider, NumberProviderRange,
+    REGISTRY, RegistryExt, TaggedRegistryExt,
 };
+use crate::data_component_predicate::DataComponentExactPredicate;
 
 /// A property check for block state conditions.
 #[derive(Debug, Clone)]
@@ -139,10 +142,107 @@ pub struct EntityPredicate {
     pub entity_type: Option<Identifier>,
     pub flags: Option<EntityFlags>,
     pub equipment: Option<EntityEquipment>,
-    /// Vanilla `minecraft:components.sheep/color` entity data component check.
-    pub sheep_color: Option<DyeColor>,
+    /// Vanilla exact `minecraft:components` entity data-component check.
+    pub components: Option<EntityExactDataComponentsPredicate>,
     /// Vanilla `minecraft:type_specific/sheep.sheared` check.
     pub sheep_sheared: Option<bool>,
+}
+
+/// One JSON value from an extracted exact entity data-component predicate.
+#[derive(Debug, Clone, Copy)]
+pub struct SerializedEntityDataComponent {
+    pub component: &'static str,
+    pub value: &'static str,
+}
+
+/// Vanilla `EntityExactDataComponentsPredicate` backed by registered component codecs.
+#[derive(Debug, Clone, Copy)]
+pub struct EntityExactDataComponentsPredicate {
+    serialized: &'static [SerializedEntityDataComponent],
+}
+
+impl EntityExactDataComponentsPredicate {
+    #[must_use]
+    pub const fn new(serialized: &'static [SerializedEntityDataComponent]) -> Self {
+        Self { serialized }
+    }
+
+    /// Returns whether every serialized value decoded through its registered codec.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        decode_exact_entity_components(self.serialized).is_some()
+    }
+
+    fn matches(&self, entity: EntityRef<'_>) -> bool {
+        let Some(predicate) = decode_exact_entity_components(self.serialized) else {
+            return false;
+        };
+        let Some(components) = entity.components else {
+            return predicate.is_empty();
+        };
+        predicate.matches(components)
+    }
+}
+
+fn decode_exact_entity_components(
+    serialized: &[SerializedEntityDataComponent],
+) -> Option<DataComponentExactPredicate> {
+    let values = serialized
+        .iter()
+        .map(|serialized| {
+            let component = serialized.component.parse().ok()?;
+            let entry = REGISTRY.data_components.by_key(&component)?;
+            let json = serde_json::from_str(serialized.value).ok()?;
+            let tag = json_to_nbt(json)?;
+            Some((entry, entry.read_nbt_owned(&tag)?))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    DataComponentExactPredicate::new(values)
+}
+
+fn json_to_nbt(value: serde_json::Value) -> Option<NbtTag> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::Bool(value) => Some(NbtTag::Byte(i8::from(value))),
+        serde_json::Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Some(match i32::try_from(value) {
+                    Ok(value) => NbtTag::Int(value),
+                    Err(_) => NbtTag::Long(value),
+                })
+            } else if let Some(value) = value.as_u64() {
+                let value = i64::try_from(value).ok()?;
+                Some(match i32::try_from(value) {
+                    Ok(value) => NbtTag::Int(value),
+                    Err(_) => NbtTag::Long(value),
+                })
+            } else {
+                value.as_f64().map(NbtTag::Double)
+            }
+        }
+        serde_json::Value::String(value) => Some(NbtTag::String(value.into())),
+        serde_json::Value::Array(values) => {
+            let values = values
+                .into_iter()
+                .map(json_to_nbt)
+                .collect::<Option<Vec<_>>>()?;
+            let component_type = values.first().map(NbtTag::id);
+            if values
+                .iter()
+                .any(|value| Some(value.id()) != component_type)
+            {
+                return None;
+            }
+            Some(NbtTag::List(NbtList::from(values)))
+        }
+        serde_json::Value::Object(values) => {
+            let mut compound = NbtCompound::new();
+            for (key, value) in values {
+                compound.insert(key, json_to_nbt(value)?);
+            }
+            Some(NbtTag::Compound(compound))
+        }
+    }
 }
 
 /// Entity flags (`is_on_fire`, `is_sneaking`, etc.)
@@ -188,12 +288,12 @@ pub struct DamageTagPredicate {
 
 impl LootCondition {
     /// Test if this condition passes given the loot context.
-    pub fn test<R: rand::Rng>(&self, ctx: &mut LootContext<'_, R>) -> bool {
+    pub fn test<R: LootRandom>(&self, ctx: &mut LootContext<'_, R>) -> bool {
         match self {
             LootCondition::SurvivesExplosion => {
                 if let Some(radius) = ctx.explosion_radius {
                     // Vanilla: 1/radius chance to survive
-                    ctx.rng.random::<f32>() <= (1.0 / radius)
+                    ctx.rng.next_loot_f32() <= (1.0 / radius)
                 } else {
                     true // No explosion, always survives
                 }
@@ -220,7 +320,7 @@ impl LootCondition {
                     false // No block state in context
                 }
             }
-            LootCondition::RandomChance(chance) => ctx.rng.random::<f32>() < *chance,
+            LootCondition::RandomChance(chance) => ctx.rng.next_loot_f32() < *chance,
             LootCondition::RandomChanceWithEnchantedBonus {
                 enchantment,
                 unenchanted_chance,
@@ -238,7 +338,7 @@ impl LootCondition {
                 } else {
                     *unenchanted_chance
                 };
-                ctx.rng.random::<f32>() < effective_chance
+                ctx.rng.next_loot_f32() < effective_chance
             }
             LootCondition::MatchTool(predicate) => {
                 if let Some(tool) = ctx.tool {
@@ -255,7 +355,7 @@ impl LootCondition {
                 let level = ctx.get_enchantment_level_by_id(enchantment);
                 let index = (level as usize).min(chances.len().saturating_sub(1));
                 let chance = chances.get(index).copied().unwrap_or(0.0);
-                ctx.rng.random::<f32>() < chance
+                ctx.rng.next_loot_f32() < chance
             }
             LootCondition::Inverted(inner) => !inner.test(ctx),
             LootCondition::AnyOf(conditions) => conditions.iter().any(|c| c.test(ctx)),
@@ -317,7 +417,7 @@ impl LootCondition {
 impl ToolPredicate {
     /// Test if the tool matches this predicate.
     #[must_use]
-    pub fn test<R: rand::Rng>(&self, tool: &ItemStack, _ctx: &LootContext<'_, R>) -> bool {
+    pub fn test<R: LootRandom>(&self, tool: &ItemStack, _ctx: &LootContext<'_, R>) -> bool {
         match self {
             ToolPredicate::Item(item_id) => tool.item.key == *item_id,
             ToolPredicate::HasEnchantment {
@@ -365,7 +465,7 @@ fn tool_enchantment_matches(
 }
 
 impl EntityPredicate {
-    fn test<R: rand::Rng>(&self, entity: EntityRef<'_>, ctx: &LootContext<'_, R>) -> bool {
+    fn test<R: LootRandom>(&self, entity: EntityRef<'_>, ctx: &LootContext<'_, R>) -> bool {
         if let Some(entity_type) = &self.entity_type
             && entity.entity_type != Some(entity_type)
         {
@@ -384,8 +484,8 @@ impl EntityPredicate {
             return false;
         }
 
-        if let Some(expected_color) = &self.sheep_color
-            && entity.sheep_color != Some(*expected_color)
+        if let Some(components) = &self.components
+            && !components.matches(entity)
         {
             return false;
         }
@@ -420,7 +520,7 @@ impl EntityFlags {
 }
 
 impl EntityEquipment {
-    fn test<R: rand::Rng>(
+    fn test<R: LootRandom>(
         &self,
         equipment: Option<&EntityEquipmentRef<'_>>,
         ctx: &LootContext<'_, R>,
@@ -448,7 +548,7 @@ impl EntityEquipment {
     }
 }
 
-fn slot_predicate_matches<R: rand::Rng>(
+fn slot_predicate_matches<R: LootRandom>(
     predicate: &Option<ToolPredicate>,
     item_stack: Option<&ItemStack>,
     ctx: &LootContext<'_, R>,
@@ -463,7 +563,7 @@ fn slot_predicate_matches<R: rand::Rng>(
 }
 
 impl DamageSourcePredicate {
-    fn test<R: rand::Rng>(&self, ctx: &LootContext<'_, R>) -> bool {
+    fn test<R: LootRandom>(&self, ctx: &LootContext<'_, R>) -> bool {
         let Some(damage_source) = ctx.damage_source else {
             return false;
         };

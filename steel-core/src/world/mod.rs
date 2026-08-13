@@ -19,6 +19,7 @@ use crate::chunk::light::{
 use crate::chunk::status::ChunkStatus;
 use crate::poi::OccupationStatus;
 use crate::portal::WorldChangeRequest;
+use crate::random_sequences::RandomSequences;
 use crate::world::game_event::{
     GameEventContext, GameEventDispatcher, GameEventListenerCount, GameEventListenerStorage,
     SharedGameEventListener,
@@ -71,7 +72,7 @@ use steel_utils::block_util::FoundRectangle;
 use steel_utils::{
     Downcast as _,
     locks::{SyncMutex, SyncRwLock},
-    random::{Random as _, RandomSource, legacy_random::LegacyRandom},
+    random::{Random as _, RandomSource, legacy_random::LegacyRandom, xoroshiro::Xoroshiro},
 };
 use steel_worldgen::{biomes::obfuscate_biome_seed, noise::PerlinSimplexNoise};
 
@@ -247,6 +248,10 @@ pub struct World {
     pub level_data: SyncRwLock<LevelDataManager>,
     /// Per-world saved data storage.
     pub(crate) saved_data: SavedDataManager,
+    /// Domain-shared named random sequences used by loot tables and commands.
+    random_sequences: Arc<RandomSequences>,
+    /// Vanilla's mutable per-level fallback random source.
+    level_random: SyncMutex<LegacyRandom>,
     /// Runtime world border state.
     world_border: SyncMutex<WorldBorder>,
     /// Vanilla sleeping player counts for night-skip checks.
@@ -321,18 +326,26 @@ impl World {
         generation_pool: Arc<rayon::ThreadPool>,
     ) -> io::Result<Arc<Self>> {
         let chunk_encoding_pool = Arc::clone(&generation_pool);
+        let level_data_path = config.level_data_path.as_deref().map(Path::new);
+        let world_seed = LevelDataManager::load_seed_or_default(level_data_path, seed).await?;
+        let random_sequences = Arc::new(RandomSequences::load(level_data_path, world_seed).await?);
         Self::new_with_config_and_encoding_pool(
             chunk_runtime,
             key,
             dimension_type,
-            seed,
+            world_seed,
             config,
             generation_pool,
             chunk_encoding_pool,
+            random_sequences,
         )
         .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "internal world construction keeps its runtime dependencies explicit"
+    )]
     pub(crate) async fn new_with_config_and_encoding_pool(
         chunk_runtime: Arc<Runtime>,
         key: Identifier,
@@ -341,6 +354,7 @@ impl World {
         config: WorldConfig,
         generation_pool: Arc<rayon::ThreadPool>,
         chunk_encoding_pool: Arc<rayon::ThreadPool>,
+        random_sequences: Arc<RandomSequences>,
     ) -> io::Result<Arc<Self>> {
         let view_distance = config.view_distance;
         let simulation_distance = config.simulation_distance;
@@ -415,6 +429,8 @@ impl World {
                 dimension_type,
                 level_data: SyncRwLock::new(level_data),
                 saved_data,
+                random_sequences,
+                level_random: SyncMutex::new(LegacyRandom::from_seed(rand::random())),
                 world_border: SyncMutex::new(world_border),
                 sleep_status: SyncMutex::new(sleep_status::SleepStatus::default()),
                 view_distance,
@@ -467,6 +483,12 @@ impl World {
             Err(e) => log::error!("Failed to save world chunk ticket data: {e}"),
         }
 
+        match self.random_sequences.save().await {
+            Ok(true) => log::info!("Saved random sequences for domain {}", self.domain()),
+            Ok(false) => {}
+            Err(e) => log::error!("Failed to save random sequences: {e}"),
+        }
+
         match self.save_all_chunks().await {
             Ok(count) => *total_saved += count,
             Err(e) => log::error!("Failed to save world chunks: {e}"),
@@ -477,6 +499,18 @@ impl World {
     #[must_use]
     pub fn domain(&self) -> &str {
         self.key.namespace.as_ref()
+    }
+
+    pub(crate) fn with_random_sequence<T>(
+        &self,
+        key: &Identifier,
+        action: impl FnOnce(&mut Xoroshiro) -> T,
+    ) -> T {
+        self.random_sequences.with_sequence(key, action)
+    }
+
+    pub(crate) fn with_level_random<T>(&self, action: impl FnOnce(&mut LegacyRandom) -> T) -> T {
+        action(&mut self.level_random.lock())
     }
 
     /// Game tick: weather, time, chunk game tick (broadcasts + random/scheduled ticks),

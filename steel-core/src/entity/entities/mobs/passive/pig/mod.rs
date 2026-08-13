@@ -9,6 +9,10 @@ use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
+use steel_registry::data_components::vanilla_components::{PIG_SOUND_VARIANT, PIG_VARIANT};
+use steel_registry::data_components::{
+    ComponentData, ComponentEntryRef, DataComponentGetter, DataComponentValue,
+};
 use steel_registry::entity_type::{
     EntityAttachmentPoint, EntityAttachments, EntityDimensions, EntityTypeRef,
 };
@@ -237,6 +241,10 @@ impl Entity for PigEntity {
         self.entity_type
     }
 
+    fn data_component_getter(&self) -> Option<&dyn DataComponentGetter> {
+        Some(self)
+    }
+
     fn base_tick(&self) {
         Mob::base_tick_mob(self);
     }
@@ -375,6 +383,19 @@ impl LivingEntity for PigEntity {
         AgeableMob::tick_ageable_mob(self);
         Animal::tick_animal_love(self);
         result
+    }
+}
+
+impl DataComponentGetter for PigEntity {
+    fn get_data_component(&self, component: ComponentEntryRef) -> Option<DataComponentValue<'_>> {
+        let value = if component.key == *PIG_VARIANT.key() {
+            ComponentData::new(RegistryReference::new(self.variant()))
+        } else if component.key == *PIG_SOUND_VARIANT.key() {
+            ComponentData::new(RegistryReference::new(self.sound_variant()))
+        } else {
+            return None;
+        };
+        Some(DataComponentValue::Owned(value))
     }
 }
 

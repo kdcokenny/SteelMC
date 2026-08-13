@@ -10,6 +10,10 @@ use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::cow_sound_variant::CowSoundVariantRef;
 use steel_registry::cow_variant::CowVariantRef;
+use steel_registry::data_components::vanilla_components::{COW_SOUND_VARIANT, COW_VARIANT};
+use steel_registry::data_components::{
+    ComponentData, ComponentEntryRef, DataComponentGetter, DataComponentValue,
+};
 use steel_registry::entity_type::{
     EntityAttachmentPoint, EntityAttachments, EntityDimensions, EntityTypeRef,
 };
@@ -247,6 +251,10 @@ impl Entity for CowEntity {
         self.entity_type
     }
 
+    fn data_component_getter(&self) -> Option<&dyn DataComponentGetter> {
+        Some(self)
+    }
+
     fn base_tick(&self) {
         Mob::base_tick_mob(self);
     }
@@ -352,6 +360,19 @@ impl LivingEntity for CowEntity {
         AgeableMob::tick_ageable_mob(self);
         Animal::tick_animal_love(self);
         result
+    }
+}
+
+impl DataComponentGetter for CowEntity {
+    fn get_data_component(&self, component: ComponentEntryRef) -> Option<DataComponentValue<'_>> {
+        let value = if component.key == *COW_VARIANT.key() {
+            ComponentData::new(RegistryReference::new(self.variant()))
+        } else if component.key == *COW_SOUND_VARIANT.key() {
+            ComponentData::new(RegistryReference::new(self.sound_variant()))
+        } else {
+            return None;
+        };
+        Some(DataComponentValue::Owned(value))
     }
 }
 

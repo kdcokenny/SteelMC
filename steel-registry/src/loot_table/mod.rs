@@ -3,7 +3,6 @@ use crate::{
     REGISTRY, RegistryExt, TaggedRegistryExt, blocks::block_state_ext::BlockStateExt,
     instrument::InstrumentRef, item_stack::ItemStack,
 };
-use rand::RngExt;
 use rustc_hash::FxHashMap;
 use steel_utils::{BlockStateId, Identifier};
 

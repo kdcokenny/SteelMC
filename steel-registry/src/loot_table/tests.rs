@@ -1,7 +1,15 @@
-use crate::data_components::vanilla_components::INSTRUMENT;
+use crate::data_components::vanilla_components::{CHICKEN_VARIANT, INSTRUMENT, SHEEP_COLOR};
+use crate::data_components::{
+    Component, ComponentEntryRef, DataComponentGetter, DataComponentMap, DataComponentType,
+    DataComponentValue,
+};
 use crate::vanilla_instrument_tags::InstrumentTag;
 use crate::vanilla_items;
-use crate::{init_vanilla_registry, vanilla_loot_tables};
+use crate::{
+    DyeColor, RegistryReference, init_vanilla_registry, vanilla_chicken_variants,
+    vanilla_loot_tables,
+};
+use steel_utils::DowncastType;
 
 use super::*;
 use rand::SeedableRng;
@@ -13,6 +21,88 @@ fn test_rng() -> rand::rngs::StdRng {
 fn init_test_registries() {
     init_vanilla_registry();
 }
+
+const SHEEP_DYE_COLOR_COUNT: usize = 16;
+static CHICKEN_LAY_RANDOM_SEQUENCE: Identifier = Identifier::vanilla_static("gameplay/chicken_lay");
+
+#[derive(Default)]
+struct EntityComponentFixture {
+    components: DataComponentMap,
+}
+
+impl EntityComponentFixture {
+    fn with<T: Component + DowncastType>(
+        mut self,
+        component: DataComponentType<T>,
+        value: T,
+    ) -> Self {
+        self.components.set(component, Some(value));
+        self
+    }
+}
+
+impl DataComponentGetter for EntityComponentFixture {
+    fn get_data_component(&self, component: ComponentEntryRef) -> Option<DataComponentValue<'_>> {
+        self.components.get_data_component(component)
+    }
+}
+
+fn component_entity(
+    components: &EntityComponentFixture,
+    sheep_sheared: Option<bool>,
+) -> EntityRef<'_> {
+    EntityRef {
+        entity_type: None,
+        flags: EntityRefFlags::default(),
+        equipment: None,
+        custom_name: None,
+        components: Some(components),
+        sheep_sheared,
+    }
+}
+
+fn exact_component_condition(
+    serialized: &'static [SerializedEntityDataComponent],
+    sheep_sheared: Option<bool>,
+) -> LootCondition {
+    LootCondition::EntityProperties {
+        entity: LootContextEntity::This,
+        predicate: EntityPredicate {
+            entity_type: None,
+            flags: None,
+            equipment: None,
+            components: Some(EntityExactDataComponentsPredicate::new(serialized)),
+            sheep_sheared,
+        },
+    }
+}
+
+static WHITE_SHEEP_COMPONENT: &[SerializedEntityDataComponent] = &[SerializedEntityDataComponent {
+    component: "minecraft:sheep/color",
+    value: "\"white\"",
+}];
+
+static WHITE_SHEEP_AND_TEMPERATE_CHICKEN_COMPONENTS: &[SerializedEntityDataComponent] = &[
+    SerializedEntityDataComponent {
+        component: "minecraft:sheep/color",
+        value: "\"white\"",
+    },
+    SerializedEntityDataComponent {
+        component: "minecraft:chicken/variant",
+        value: "\"minecraft:temperate\"",
+    },
+];
+
+static UNKNOWN_ENTITY_COMPONENT: &[SerializedEntityDataComponent] =
+    &[SerializedEntityDataComponent {
+        component: "minecraft:not_registered",
+        value: "true",
+    }];
+
+static INVALID_SHEEP_COLOR: &[SerializedEntityDataComponent] = &[SerializedEntityDataComponent {
+    component: "minecraft:sheep/color",
+    value: "\"not_a_color\"",
+}];
 
 #[test]
 fn test_oak_log_loot() {
@@ -105,7 +195,7 @@ fn test_pig_loot_drops_raw_porkchop_when_not_on_fire() {
         flags: EntityRefFlags::default(),
         equipment: None,
         custom_name: None,
-        sheep_color: None,
+        components: None,
         sheep_sheared: None,
     };
 
@@ -143,7 +233,10 @@ fn shearing_sheep_table_parses_the_flat_type_specific_sheep_key() {
             continue;
         };
         assert!(
-            predicate.sheep_color.is_some(),
+            predicate
+                .components
+                .as_ref()
+                .is_some_and(EntityExactDataComponentsPredicate::is_valid),
             "branch should match its wool color"
         );
         assert_eq!(
@@ -154,7 +247,7 @@ fn shearing_sheep_table_parses_the_flat_type_specific_sheep_key() {
         checked += 1;
     }
     assert_eq!(
-        checked, 16,
+        checked, SHEEP_DYE_COLOR_COUNT,
         "all sixteen color branches should carry the sheared predicate"
     );
 }
@@ -169,7 +262,7 @@ fn sheared_predicate_rejects_non_sheep_entities() {
         flags: EntityRefFlags::default(),
         equipment: None,
         custom_name: None,
-        sheep_color: None,
+        components: None,
         sheep_sheared: None,
     };
     let mut ctx = LootContext::new(&mut rng).with_this_entity(pig);
@@ -180,7 +273,7 @@ fn sheared_predicate_rejects_non_sheep_entities() {
             entity_type: None,
             flags: None,
             equipment: None,
-            sheep_color: None,
+            components: None,
             sheep_sheared: Some(false),
         },
     };
@@ -188,6 +281,102 @@ fn sheared_predicate_rejects_non_sheep_entities() {
         !condition.test(&mut ctx),
         "a non-sheep entity must fail a sheared predicate, mirroring SheepPredicate.matches"
     );
+}
+
+#[test]
+fn sheep_color_and_sheared_predicates_remain_independent() {
+    init_test_registries();
+    let white = EntityComponentFixture::default().with(SHEEP_COLOR, DyeColor::White);
+    let black = EntityComponentFixture::default().with(SHEEP_COLOR, DyeColor::Black);
+    let condition = exact_component_condition(WHITE_SHEEP_COMPONENT, Some(false));
+
+    for (fixture, sheared, expected, behavior) in [
+        (&white, false, true, "matching color and unsheared"),
+        (&white, true, false, "matching color but sheared"),
+        (&black, false, false, "wrong color but unsheared"),
+    ] {
+        let mut rng = test_rng();
+        let mut context =
+            LootContext::new(&mut rng).with_this_entity(component_entity(fixture, Some(sheared)));
+        assert_eq!(condition.test(&mut context), expected, "{behavior}");
+    }
+}
+
+#[test]
+fn exact_entity_components_match_conjunctively_and_reject_missing_values() {
+    init_test_registries();
+    let complete = EntityComponentFixture::default()
+        .with(SHEEP_COLOR, DyeColor::White)
+        .with(
+            CHICKEN_VARIANT,
+            RegistryReference::new(&vanilla_chicken_variants::TEMPERATE),
+        );
+    let missing_chicken = EntityComponentFixture::default().with(SHEEP_COLOR, DyeColor::White);
+    let wrong_chicken = EntityComponentFixture::default()
+        .with(SHEEP_COLOR, DyeColor::White)
+        .with(
+            CHICKEN_VARIANT,
+            RegistryReference::new(&vanilla_chicken_variants::WARM),
+        );
+    let condition = exact_component_condition(WHITE_SHEEP_AND_TEMPERATE_CHICKEN_COMPONENTS, None);
+
+    for (fixture, expected, behavior) in [
+        (&complete, true, "all component values match"),
+        (&missing_chicken, false, "one required component is absent"),
+        (&wrong_chicken, false, "one required component differs"),
+    ] {
+        let mut rng = test_rng();
+        let mut context =
+            LootContext::new(&mut rng).with_this_entity(component_entity(fixture, None));
+        assert_eq!(condition.test(&mut context), expected, "{behavior}");
+    }
+}
+
+#[test]
+fn invalid_entity_component_keys_and_codec_values_fail_closed() {
+    init_test_registries();
+    let fixture = EntityComponentFixture::default().with(SHEEP_COLOR, DyeColor::White);
+
+    for (serialized, behavior) in [
+        (UNKNOWN_ENTITY_COMPONENT, "unregistered component type"),
+        (INVALID_SHEEP_COLOR, "registered codec rejects value"),
+    ] {
+        let condition = exact_component_condition(serialized, None);
+        let mut rng = test_rng();
+        let mut context =
+            LootContext::new(&mut rng).with_this_entity(component_entity(&fixture, None));
+        assert!(!condition.test(&mut context), "{behavior}");
+    }
+}
+
+#[test]
+fn chicken_lay_uses_generic_chicken_variant_component_state() {
+    init_test_registries();
+    let table = &vanilla_loot_tables::GAMEPLAY_CHICKEN_LAY;
+
+    assert_eq!(table.loot_type, LootType::Gift);
+    assert_eq!(
+        table.random_sequence.as_ref(),
+        Some(&CHICKEN_LAY_RANDOM_SEQUENCE)
+    );
+
+    for (variant, expected_item) in [
+        (&vanilla_chicken_variants::TEMPERATE, &vanilla_items::EGG),
+        (&vanilla_chicken_variants::WARM, &vanilla_items::BROWN_EGG),
+        (&vanilla_chicken_variants::COLD, &vanilla_items::BLUE_EGG),
+    ] {
+        let fixture = EntityComponentFixture::default()
+            .with(CHICKEN_VARIANT, RegistryReference::new(variant));
+        let mut rng = test_rng();
+        let mut context = LootContext::new(&mut rng)
+            .with_loot_type(LootType::Gift)
+            .with_this_entity(component_entity(&fixture, None));
+
+        let items = table.get_random_items(&mut context);
+
+        assert_eq!(items.len(), 1, "{} variant returns one egg", variant.key);
+        assert_eq!(items[0].item.key, expected_item.key, "{} egg", variant.key);
+    }
 }
 
 #[test]
@@ -203,7 +392,7 @@ fn test_pig_loot_smelt_condition_uses_entity_fire_flag() {
         },
         equipment: None,
         custom_name: None,
-        sheep_color: None,
+        components: None,
         sheep_sheared: None,
     };
 

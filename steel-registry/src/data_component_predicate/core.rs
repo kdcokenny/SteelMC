@@ -328,6 +328,19 @@ impl DataComponentExactPredicate {
         &self.values
     }
 
+    /// Tests every exact value against a runtime component holder.
+    ///
+    /// Missing components fail and multiple entries form a conjunction, matching
+    /// Vanilla `DataComponentExactPredicate.test`.
+    #[must_use]
+    pub fn matches(&self, components: &dyn DataComponentGetter) -> bool {
+        self.values.iter().all(|(entry, expected)| {
+            components
+                .get_data_component(entry)
+                .is_some_and(|actual| actual.as_component_data() == expected)
+        })
+    }
+
     fn from_owned_nbt(tag: &NbtTag) -> Option<Self> {
         let compound = tag.compound()?;
         let mut values = Vec::with_capacity(compound.len());

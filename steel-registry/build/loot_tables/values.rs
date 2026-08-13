@@ -69,29 +69,6 @@ pub(super) fn generate_equipment_slot_group(slot: &str) -> TokenStream {
     }
 }
 
-/// Generate the `DyeColor` enum variant at build time.
-pub(super) fn generate_dye_color(color: &str) -> TokenStream {
-    match color {
-        "white" => quote! { DyeColor::White },
-        "orange" => quote! { DyeColor::Orange },
-        "magenta" => quote! { DyeColor::Magenta },
-        "light_blue" => quote! { DyeColor::LightBlue },
-        "yellow" => quote! { DyeColor::Yellow },
-        "lime" => quote! { DyeColor::Lime },
-        "pink" => quote! { DyeColor::Pink },
-        "gray" => quote! { DyeColor::Gray },
-        "light_gray" => quote! { DyeColor::LightGray },
-        "cyan" => quote! { DyeColor::Cyan },
-        "purple" => quote! { DyeColor::Purple },
-        "blue" => quote! { DyeColor::Blue },
-        "brown" => quote! { DyeColor::Brown },
-        "green" => quote! { DyeColor::Green },
-        "red" => quote! { DyeColor::Red },
-        "black" => quote! { DyeColor::Black },
-        _ => quote! { DyeColor::White },
-    }
-}
-
 /// Generate the `LootType` enum variant at build time.
 pub(super) fn generate_loot_type(loot_type: &str) -> TokenStream {
     match loot_type {
@@ -340,17 +317,30 @@ pub(super) fn generate_entity_predicate(predicate: &EntityPredicateJson) -> Toke
     let flags = generate_entity_flags(&predicate.flags);
     let equipment = generate_entity_equipment(&predicate.equipment);
 
-    let sheep_color = predicate
-        .components
-        .as_ref()
-        .and_then(|components| components.sheep_color.as_deref())
-        .map_or_else(
-            || quote! { None },
-            |color| {
-                let color = generate_dye_color(color);
-                quote! { Some(#color) }
-            },
-        );
+    let components = predicate.components.as_ref().map_or_else(
+        || quote! { None },
+        |components| {
+            let entries = components.iter().map(|(key, value)| {
+                let Ok(_) = Identifier::from_str(key) else {
+                    panic!("invalid entity component {key}");
+                };
+                let Ok(value) = serde_json::to_string(value) else {
+                    panic!("failed to encode entity component {key}");
+                };
+                quote! {
+                    SerializedEntityDataComponent {
+                        component: #key,
+                        value: #value,
+                    }
+                }
+            });
+            quote! {
+                Some(EntityExactDataComponentsPredicate::new(&[
+                    #(#entries),*
+                ]))
+            }
+        },
+    );
     let sheep_sheared = predicate
         .sheep_type_specific
         .as_ref()
@@ -362,7 +352,7 @@ pub(super) fn generate_entity_predicate(predicate: &EntityPredicateJson) -> Toke
             entity_type: #entity_type,
             flags: #flags,
             equipment: #equipment,
-            sheep_color: #sheep_color,
+            components: #components,
             sheep_sheared: #sheep_sheared,
         }
     }

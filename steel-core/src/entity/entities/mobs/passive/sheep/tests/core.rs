@@ -1,4 +1,5 @@
 use super::*;
+use crate::entity::living_entity::living_entity_loot_ref;
 
 /// Trials for the random breeding-color fallback assertion.
 const COLOR_FALLBACK_TRIALS: u32 = 32;
@@ -6,6 +7,8 @@ const COLOR_FALLBACK_TRIALS: u32 = 32;
 const SPAWN_COLOR_TRIALS: u32 = 64;
 /// Vanilla tick rate, converting `AgeableMob.ageUp` seconds into ticks.
 const TICKS_PER_SECOND: i32 = 20;
+/// Entity ID used by the isolated component-capability test.
+const COMPONENT_TEST_ENTITY_ID: i32 = 1;
 
 #[test]
 fn sheep_initializes_vanilla_living_attributes_and_health() {
@@ -482,4 +485,34 @@ fn sheep_shear_loot_resolves_the_matching_color_table() {
     for drop in &drops {
         assert!(drop.is(&vanilla_items::RED_WOOL));
     }
+}
+
+#[test]
+fn sheep_component_color_and_type_specific_sheared_state_are_independent() {
+    init_vanilla_registry();
+
+    let sheep = SheepEntity::new(
+        &vanilla_entities::SHEEP,
+        COMPONENT_TEST_ENTITY_ID,
+        DVec3::ZERO,
+        Weak::new(),
+    );
+    sheep.set_color(DyeColor::Red);
+    sheep.set_sheared(true);
+    let entity = living_entity_loot_ref(&sheep);
+    let Some(component) = REGISTRY.data_components.by_key(SHEEP_COLOR.key()) else {
+        panic!("sheep color component should be registered");
+    };
+    let color = entity
+        .components
+        .and_then(|components| components.get_data_component(component))
+        .and_then(|value| {
+            value
+                .as_component_data()
+                .downcast_ref::<DyeColor>()
+                .copied()
+        });
+
+    assert_eq!(color, Some(DyeColor::Red));
+    assert_eq!(entity.sheep_sheared, Some(true));
 }

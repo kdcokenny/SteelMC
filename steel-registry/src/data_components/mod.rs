@@ -57,3 +57,39 @@ pub use registry::{
     NetworkWriter,
     component_try_into,
 };
+
+/// A component value exposed by a runtime data-component holder.
+///
+/// Stored component maps can lend their existing value, while entities whose
+/// value is derived from runtime state can return an owned value.
+pub enum DataComponentValue<'a> {
+    Borrowed(&'a ComponentData),
+    Owned(ComponentData),
+}
+
+impl DataComponentValue<'_> {
+    /// Returns the erased component value.
+    #[must_use]
+    pub const fn as_component_data(&self) -> &ComponentData {
+        match self {
+            Self::Borrowed(value) => value,
+            Self::Owned(value) => value,
+        }
+    }
+}
+
+/// Vanilla `DataComponentGetter`, modeled as an object-safe capability.
+///
+/// Concrete entities implement this directly so loot predicates do not need a
+/// central concrete-entity switch.
+pub trait DataComponentGetter: Send + Sync {
+    /// Returns the value for `component`, or `None` when it is absent.
+    fn get_data_component(&self, component: ComponentEntryRef) -> Option<DataComponentValue<'_>>;
+}
+
+impl DataComponentGetter for DataComponentMap {
+    fn get_data_component(&self, component: ComponentEntryRef) -> Option<DataComponentValue<'_>> {
+        self.get_raw(&component.key)
+            .map(DataComponentValue::Borrowed)
+    }
+}

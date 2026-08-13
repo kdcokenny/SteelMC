@@ -19,6 +19,7 @@ use steel_registry::blocks::{
     behavior::PushReaction, block_state_ext::BlockStateExt as _, properties::BlockStateProperties,
     shapes::is_shape_full_block,
 };
+use steel_registry::data_components::DataComponentGetter;
 use steel_registry::data_components::vanilla_components::{
     GLIDER, SWING_ANIMATION, SwingAnimation,
 };
@@ -30,7 +31,8 @@ use steel_registry::game_events::GameEventRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
 use steel_registry::loot_table::{
-    DamageSourceInfo, EntityRef, EntityRefFlags, LootContext, LootTableRef,
+    DamageSourceInfo, EntityRef, EntityRefFlags, LootContext, LootRandom, LootTableRef, LootType,
+    SteelLootRandom,
 };
 use steel_registry::mob_effect::MobEffectRef;
 use steel_registry::sound_event::SoundEventRef;
@@ -1320,7 +1322,6 @@ fn remove_after_changing_dimensions(entity: &dyn Entity) {
 
 pub(crate) fn entity_loot_ref(entity: &dyn Entity) -> EntityRef<'_> {
     let living_entity = entity.as_living_entity();
-    let sheep = living_entity.and_then(LivingEntity::sheep_loot_state);
     EntityRef {
         entity_type: Some(&entity.entity_type().key),
         flags: EntityRefFlags {
@@ -1333,8 +1334,8 @@ pub(crate) fn entity_loot_ref(entity: &dyn Entity) -> EntityRef<'_> {
         // TODO: Include equipment and custom name once loot contexts can snapshot entity data.
         equipment: None,
         custom_name: None,
-        sheep_color: sheep.map(|(color, _)| color),
-        sheep_sheared: sheep.map(|(_, sheared)| sheared),
+        components: entity.data_component_getter(),
+        sheep_sheared: living_entity.and_then(LivingEntity::sheep_sheared),
     }
 }
 
