@@ -4,11 +4,11 @@ use crate::block_entity::{
     SharedBlockEntity,
     entities::{ComparatorBlockEntity, SignBlockEntity},
 };
-use crate::chunk::Chunk;
 use crate::chunk::full_chunk::FullChunkRef;
 use crate::chunk::heightmap::ChunkHeightmaps;
 use crate::chunk::light::ChunkLightData;
 use crate::chunk::section::{ChunkSection, Sections};
+use crate::chunk::{Chunk, DEFAULT_INHABITED_TIME};
 use crate::chunk_saver::RamOnlyStorage;
 use crate::player::connection::NetworkConnection;
 use crate::player::{PlayerConnection, ResetReason};
@@ -163,6 +163,7 @@ fn insert_active_full_holder_with_ticks(
     let chunk = Chunk::from_full_disk(
         Sections::from_owned(sections),
         pos,
+        DEFAULT_INHABITED_TIME,
         min_y,
         height,
         Arc::downgrade(world),
@@ -225,6 +226,7 @@ fn unloaded_light_holder(pos: ChunkPos) -> Arc<ChunkHolder> {
         Sections::from_owned(vec![ChunkSection::new_empty()].into_boxed_slice()),
         pos,
         ChunkStatus::Light,
+        DEFAULT_INHABITED_TIME,
         0,
         16,
         ChunkHeightmaps::new(0, 16),
@@ -252,6 +254,7 @@ fn unloaded_full_holder(pos: ChunkPos) -> Arc<ChunkHolder> {
     let chunk = Chunk::from_full_disk(
         Sections::from_owned(vec![ChunkSection::new_empty()].into_boxed_slice()),
         pos,
+        DEFAULT_INHABITED_TIME,
         0,
         16,
         Weak::new(),

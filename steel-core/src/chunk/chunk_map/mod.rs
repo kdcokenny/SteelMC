@@ -1,11 +1,12 @@
 use arc_swap::ArcSwap;
+use glam::DVec3;
 use rayon::ThreadPool;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::{
     io, mem,
     sync::{
         Arc, Weak,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -86,6 +87,12 @@ use light_update_state::{InFlightLightUpdates, LightUpdateState, PendingChunkLig
 const GENERATION_THREAD_MULTIPLE: usize = 2;
 // Vanilla applies this limit independently to block ticks and fluid ticks.
 const MAX_SCHEDULED_TICKS_PER_TICK: usize = 65_536;
+const INITIAL_LAST_INHABITED_UPDATE: i64 = 0;
+const BLOCKS_PER_CHUNK_EDGE: f64 = 16.0;
+const CHUNK_CENTER_BLOCK_OFFSET: f64 = 8.0;
+const NATURAL_SPAWN_DISTANCE_BLOCKS: f64 = 128.0;
+const NATURAL_SPAWN_DISTANCE_SQUARED: f64 =
+    NATURAL_SPAWN_DISTANCE_BLOCKS * NATURAL_SPAWN_DISTANCE_BLOCKS;
 
 /// Lifetime, in ticks, of a thrown ender pearl's chunk ticket (vanilla
 /// `TicketType.ENDER_PEARL` timeout). The pearl refreshes it every
@@ -235,6 +242,8 @@ pub struct ChunkMap {
     full_neighborhood: SyncMutex<FullNeighborhoodIndex>,
     /// Readiness-driven chunk views published at lifecycle boundaries.
     ticking_chunks: ArcSwap<TickingChunkSnapshot>,
+    /// Game time observed by the previous inhabited-chunk update.
+    last_inhabited_update: AtomicI64,
     /// Final-unload callbacks waiting for the serialized lifecycle boundary.
     finalized_block_entity_unloads: SyncMutex<Vec<FinalizedBlockEntityUnload>>,
     /// Timed gameplay ticket owners that expire through the game tick.
@@ -372,6 +381,7 @@ impl ChunkMap {
             full_publications,
             full_neighborhood: SyncMutex::new(FullNeighborhoodIndex::default()),
             ticking_chunks: ArcSwap::from_pointee(TickingChunkSnapshot::default()),
+            last_inhabited_update: AtomicI64::new(INITIAL_LAST_INHABITED_UPDATE),
             finalized_block_entity_unloads: SyncMutex::new(Vec::new()),
             timed_chunk_tickets: SyncMutex::new(timed_chunk_tickets),
             world_gen_context: Arc::new(WorldGenContext::new(
@@ -874,6 +884,11 @@ impl ChunkMap {
         runs_normally: bool,
     ) -> ChunkMapGameTickTimings {
         let mut timings = ChunkMapGameTickTimings::default();
+        let game_time = world.game_time();
+        let inhabited_time_delta = game_time.wrapping_sub(
+            self.last_inhabited_update
+                .swap(game_time, Ordering::Relaxed),
+        );
 
         if tick_count.is_multiple_of(100) {
             tracing::debug!(
@@ -907,6 +922,17 @@ impl ChunkMap {
                 )
                 .entered();
                 let start = Instant::now();
+                let spawning_player_positions = Self::spawning_player_positions(world);
+                for tickable_chunk in &tickable_chunks.block {
+                    if spawning_player_positions.iter().any(|position| {
+                        Self::position_is_close_enough_for_spawning(*position, tickable_chunk.pos)
+                    }) && let Some(chunk) = tickable_chunk.holder.try_full_chunk()
+                    {
+                        chunk
+                            .common()
+                            .increment_inhabited_time(inhabited_time_delta);
+                    }
+                }
                 // Block and fluid collection share the same post-`tick_time`
                 // timestamp even though block callbacks run between the phases.
                 let current_tick = world.game_time();
@@ -950,6 +976,35 @@ impl ChunkMap {
         }
 
         timings
+    }
+
+    fn spawning_player_positions(world: &World) -> Vec<DVec3> {
+        let mut positions = Vec::new();
+        world.players.iter_players(|_, player| {
+            if !player.is_spectator() {
+                positions.push(player.position());
+            }
+            true
+        });
+        positions
+    }
+
+    #[cfg(test)]
+    fn player_is_close_enough_for_spawning(player: &Player, chunk_pos: ChunkPos) -> bool {
+        if player.is_spectator() {
+            return false;
+        }
+        Self::position_is_close_enough_for_spawning(player.position(), chunk_pos)
+    }
+
+    fn position_is_close_enough_for_spawning(player_pos: DVec3, chunk_pos: ChunkPos) -> bool {
+        let chunk_center_x =
+            f64::from(chunk_pos.0.x) * BLOCKS_PER_CHUNK_EDGE + CHUNK_CENTER_BLOCK_OFFSET;
+        let chunk_center_z =
+            f64::from(chunk_pos.0.y) * BLOCKS_PER_CHUNK_EDGE + CHUNK_CENTER_BLOCK_OFFSET;
+        let x_distance = chunk_center_x - player_pos.x;
+        let z_distance = chunk_center_z - player_pos.z;
+        x_distance * x_distance + z_distance * z_distance < NATURAL_SPAWN_DISTANCE_SQUARED
     }
 
     /// Commits a ready scheduling epoch and forks the next background epoch.

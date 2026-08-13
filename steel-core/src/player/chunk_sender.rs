@@ -408,7 +408,7 @@ mod tests {
     use super::*;
     use crate::behavior::init_behaviors;
     use crate::chunk::{
-        Chunk,
+        Chunk, DEFAULT_INHABITED_TIME,
         chunk_holder::TickingReadiness,
         chunk_ticket_manager::ChunkTicketLevel,
         heightmap::ChunkHeightmaps,
@@ -424,6 +424,7 @@ mod tests {
         let chunk = Chunk::from_full_disk(
             Sections::from_owned(vec![ChunkSection::new_empty()].into_boxed_slice()),
             pos,
+            DEFAULT_INHABITED_TIME,
             0,
             16,
             Weak::new(),

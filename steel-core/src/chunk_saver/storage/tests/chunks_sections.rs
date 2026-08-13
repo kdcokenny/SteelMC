@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn newly_generated_chunk_has_zero_inhabited_time() {
+    const MIN_Y: i32 = 0;
+    const WORLD_HEIGHT: i32 = 16;
+
+    init_vanilla_registry();
+
+    let chunk = Chunk::new(
+        single_empty_section(),
+        ChunkPos::new(0, 0),
+        MIN_Y,
+        WORLD_HEIGHT,
+        Weak::new(),
+    );
+
+    assert_eq!(chunk.inhabited_time(), DEFAULT_INHABITED_TIME);
+}
+
+#[tokio::test]
+async fn inhabited_time_survives_storage_unload_and_reload() {
+    const STORED_INHABITED_TIME: i64 = 3_600_000;
+    const MIN_Y: i32 = 0;
+    const WORLD_HEIGHT: i32 = 16;
+
+    init_vanilla_registry();
+
+    let pos = ChunkPos::new(3, -4);
+    let chunk = Chunk::new(
+        single_empty_section(),
+        pos,
+        MIN_Y,
+        WORLD_HEIGHT,
+        Weak::new(),
+    );
+    chunk.clear_dirty();
+    chunk.set_inhabited_time(STORED_INHABITED_TIME);
+    assert!(chunk.is_dirty());
+    let Some(prepared) = ChunkStorage::prepare_chunk_save(&chunk, ChunkStatus::Empty, &[], false)
+    else {
+        panic!("changed inhabited time should prepare a chunk save");
+    };
+    assert_eq!(prepared.persistent.inhabited_time, STORED_INHABITED_TIME);
+
+    let storage = RamOnlyStorage::empty_world();
+    let Ok(true) = storage.save_chunk_data(prepared).await else {
+        panic!("prepared chunk should save to RAM storage");
+    };
+    let Ok(Some(loaded)) = storage
+        .load_chunk(pos, MIN_Y, WORLD_HEIGHT, Weak::new())
+        .await
+    else {
+        panic!("saved chunk should reload from RAM storage");
+    };
+
+    assert_eq!(loaded.chunk.inhabited_time(), STORED_INHABITED_TIME);
+    assert!(!loaded.chunk.is_dirty());
+}
+
+#[test]
 #[should_panic(expected = "persisted chunk status must match its Full runtime state")]
 fn chunk_save_rejects_full_status_for_proto_data() {
     init_vanilla_registry();
@@ -273,6 +331,7 @@ fn full_chunk_postprocessing_roundtrips_through_persistent_chunk() {
     let packed = Chunk::pack_postprocessing_offset(marked);
     let persistent = ChunkStorage::to_persistent(
         &single_empty_section(),
+        DEFAULT_INHABITED_TIME,
         &[],
         &[],
         &[],

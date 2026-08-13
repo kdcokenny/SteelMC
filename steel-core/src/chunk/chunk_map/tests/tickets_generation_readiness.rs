@@ -449,6 +449,163 @@ fn ticking_snapshot_preserves_scc_order_and_distinct_readiness_gates() {
 }
 
 #[test]
+fn inhabited_time_uses_elapsed_game_time_for_nearby_block_ticking_chunks() {
+    use glam::DVec3;
+
+    const NO_PLAYER_GAME_TIME: i64 = 20;
+    const PLAYER_NEARBY_GAME_TIME: i64 = 25;
+    const FROZEN_GAME_TIME: i64 = 30;
+    const RESUMED_GAME_TIME: i64 = 35;
+    const NO_PLAYER_SERVER_TICK: u64 = 1;
+    const PLAYER_NEARBY_SERVER_TICK: u64 = 2;
+    const FROZEN_SERVER_TICK: u64 = 3;
+    const RESUMED_SERVER_TICK: u64 = 4;
+    const DISABLED_RANDOM_TICK_SPEED: u32 = 0;
+    const TEST_PLAYER_UUID: u128 = 1;
+    const TEST_PLAYER_ENTITY_ID: i32 = 1;
+
+    init_vanilla_registry();
+    init_behaviors();
+
+    let world = fresh_test_world("inhabited_time_ticking");
+    let nearby_pos = ChunkPos::new(0, 0);
+    let non_ticking_pos = ChunkPos::new(0, 1);
+    let outside_spawn_distance_pos = ChunkPos::new(9, 0);
+    let nearby_holder = insert_ready_full_chunk(&world, nearby_pos);
+    let non_ticking_holder = insert_ready_full_chunk(&world, non_ticking_pos);
+    let outside_holder = insert_ready_full_chunk(&world, outside_spawn_distance_pos);
+    non_ticking_holder.set_simulation_level(None);
+    world.chunk_map.rebuild_ticking_chunk_snapshot();
+    let Some(nearby_chunk) = nearby_holder.try_full_chunk() else {
+        panic!("nearby test chunk should remain Full");
+    };
+    let Some(non_ticking_chunk) = non_ticking_holder.try_full_chunk() else {
+        panic!("non-ticking test chunk should remain Full");
+    };
+    let Some(outside_chunk) = outside_holder.try_full_chunk() else {
+        panic!("distant test chunk should remain Full");
+    };
+
+    world.level_data.write().set_game_time(NO_PLAYER_GAME_TIME);
+    world.chunk_map.tick_game(
+        &world,
+        NO_PLAYER_SERVER_TICK,
+        DISABLED_RANDOM_TICK_SPEED,
+        true,
+    );
+    assert_eq!(
+        nearby_chunk.common().inhabited_time(),
+        DEFAULT_INHABITED_TIME
+    );
+
+    let player = TestPlayerBuilder::new(
+        Arc::clone(&world),
+        Uuid::from_u128(TEST_PLAYER_UUID),
+        "InhabitedTimePlayer",
+        TEST_PLAYER_ENTITY_ID,
+    )
+    .build();
+    let nearby_chunk_center = DVec3::new(
+        CHUNK_CENTER_BLOCK_OFFSET,
+        f64::from(world.get_min_y()),
+        CHUNK_CENTER_BLOCK_OFFSET,
+    );
+    assert!(player.try_set_position(nearby_chunk_center).is_ok());
+    assert!(world.players.insert(player));
+
+    world
+        .level_data
+        .write()
+        .set_game_time(PLAYER_NEARBY_GAME_TIME);
+    world.chunk_map.tick_game(
+        &world,
+        PLAYER_NEARBY_SERVER_TICK,
+        DISABLED_RANDOM_TICK_SPEED,
+        true,
+    );
+    let nearby_elapsed_ticks = PLAYER_NEARBY_GAME_TIME - NO_PLAYER_GAME_TIME;
+    assert_eq!(nearby_chunk.common().inhabited_time(), nearby_elapsed_ticks);
+    assert_eq!(
+        non_ticking_chunk.common().inhabited_time(),
+        DEFAULT_INHABITED_TIME
+    );
+    assert_eq!(
+        outside_chunk.common().inhabited_time(),
+        DEFAULT_INHABITED_TIME
+    );
+
+    world.level_data.write().set_game_time(FROZEN_GAME_TIME);
+    world.chunk_map.tick_game(
+        &world,
+        FROZEN_SERVER_TICK,
+        DISABLED_RANDOM_TICK_SPEED,
+        false,
+    );
+    assert_eq!(nearby_chunk.common().inhabited_time(), nearby_elapsed_ticks);
+
+    world.level_data.write().set_game_time(RESUMED_GAME_TIME);
+    world.chunk_map.tick_game(
+        &world,
+        RESUMED_SERVER_TICK,
+        DISABLED_RANDOM_TICK_SPEED,
+        true,
+    );
+    assert_eq!(
+        nearby_chunk.common().inhabited_time(),
+        nearby_elapsed_ticks + (RESUMED_GAME_TIME - FROZEN_GAME_TIME)
+    );
+}
+
+#[test]
+fn inhabited_time_player_proximity_is_strict_and_excludes_spectators() {
+    use glam::DVec3;
+    use steel_utils::types::GameType;
+
+    const TEST_PLAYER_UUID: u128 = 2;
+    const TEST_PLAYER_ENTITY_ID: i32 = 2;
+    const CHUNK_CENTER_Y: f64 = 64.0;
+    const JUST_INSIDE_DISTANCE_DELTA: f64 = 0.5;
+    const JUST_INSIDE_SPAWN_DISTANCE: f64 =
+        NATURAL_SPAWN_DISTANCE_BLOCKS - JUST_INSIDE_DISTANCE_DELTA;
+
+    init_vanilla_registry();
+
+    let world = fresh_test_world("inhabited_time_player_proximity");
+    let chunk_pos = ChunkPos::new(0, 0);
+    let player = TestPlayerBuilder::new(
+        world,
+        Uuid::from_u128(TEST_PLAYER_UUID),
+        "InhabitedTimeBoundaryPlayer",
+        TEST_PLAYER_ENTITY_ID,
+    )
+    .build();
+    let exact_boundary = DVec3::new(
+        CHUNK_CENTER_BLOCK_OFFSET + NATURAL_SPAWN_DISTANCE_BLOCKS,
+        CHUNK_CENTER_Y,
+        CHUNK_CENTER_BLOCK_OFFSET,
+    );
+    assert!(player.try_set_position(exact_boundary).is_ok());
+    assert!(!ChunkMap::player_is_close_enough_for_spawning(
+        &player, chunk_pos
+    ));
+
+    let inside_boundary = DVec3::new(
+        CHUNK_CENTER_BLOCK_OFFSET + JUST_INSIDE_SPAWN_DISTANCE,
+        CHUNK_CENTER_Y,
+        CHUNK_CENTER_BLOCK_OFFSET,
+    );
+    assert!(player.try_set_position(inside_boundary).is_ok());
+    assert!(ChunkMap::player_is_close_enough_for_spawning(
+        &player, chunk_pos
+    ));
+
+    player.restore_game_modes(GameType::Spectator, None);
+    assert!(!ChunkMap::player_is_close_enough_for_spawning(
+        &player, chunk_pos
+    ));
+}
+
+#[test]
 fn simulation_changes_rebuild_only_eligible_snapshot_membership() {
     init_vanilla_registry();
     init_behaviors();

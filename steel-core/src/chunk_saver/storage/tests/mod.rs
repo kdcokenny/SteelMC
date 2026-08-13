@@ -4,6 +4,7 @@ use super::*;
 use std::sync::Arc;
 
 use crate::bootstrap::init_globals_once;
+use crate::chunk::DEFAULT_INHABITED_TIME;
 use crate::entity::{
     DEFAULT_MAX_AIR_SUPPLY, Entity, SharedEntity,
     entities::{EndCrystalEntity, RawEntity},

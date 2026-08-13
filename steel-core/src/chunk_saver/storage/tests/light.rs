@@ -90,6 +90,7 @@ fn persistent_chunk_loads_chunk_owned_light_into_full_chunk() {
     let persistent_light = ChunkStorage::light_to_persistent(&light);
     let persistent = ChunkStorage::to_persistent(
         &single_empty_section(),
+        DEFAULT_INHABITED_TIME,
         &[],
         &[],
         &[],

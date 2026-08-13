@@ -15,7 +15,7 @@ use crate::behavior::init_behaviors;
 use crate::block_entity::entities::ComparatorBlockEntity;
 use crate::block_entity::{BlockEntityBase, SharedBlockEntity, entities::RawBlockEntity};
 use crate::chunk::{
-    Chunk,
+    Chunk, DEFAULT_INHABITED_TIME,
     chunk_ticket_manager::ChunkTicketLevel,
     heightmap::{ChunkHeightmaps, HeightmapType},
     light::{ChunkLightData, LightSection, LightSectionData},
@@ -64,6 +64,7 @@ fn full_disk_construction_returns_initialized_runtime() {
     let full = Chunk::from_full_disk(
         Sections::from_owned(vec![ChunkSection::new_empty()].into_boxed_slice()),
         ChunkPos::new(0, 0),
+        DEFAULT_INHABITED_TIME,
         0,
         16,
         Weak::new(),

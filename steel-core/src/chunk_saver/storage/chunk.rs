@@ -425,6 +425,7 @@ impl ChunkStorage {
             let chunk = Chunk::from_full_disk(
                 sections,
                 pos,
+                persistent.inhabited_time,
                 min_y,
                 height,
                 level.clone(),
@@ -503,6 +504,7 @@ impl ChunkStorage {
                 sections,
                 pos,
                 status,
+                persistent.inhabited_time,
                 min_y,
                 height,
                 heightmaps,

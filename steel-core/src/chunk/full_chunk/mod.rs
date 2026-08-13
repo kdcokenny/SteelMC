@@ -353,6 +353,7 @@ impl Chunk {
     pub(crate) fn from_full_disk(
         sections: Sections,
         pos: ChunkPos,
+        inhabited_time: i64,
         min_y: i32,
         height: i32,
         level: Weak<World>,
@@ -378,6 +379,7 @@ impl Chunk {
             sections,
             pos,
             ChunkStatus::Full,
+            inhabited_time,
             min_y,
             height,
             heightmaps,

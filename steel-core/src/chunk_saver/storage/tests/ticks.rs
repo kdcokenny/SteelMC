@@ -24,6 +24,7 @@ fn persisted_proto_ticks_deduplicate_while_full_ticks_retain_saved_entries() {
     ];
     let persistent = ChunkStorage::to_persistent(
         &single_empty_section(),
+        DEFAULT_INHABITED_TIME,
         &[],
         &[],
         &[],

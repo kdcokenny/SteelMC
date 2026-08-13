@@ -1,6 +1,8 @@
 use std::str::FromStr as _;
 
 use steel_registry::dimension_type::DimensionTypeRef;
+use steel_registry::environment_attribute::MOON_PHASE;
+use steel_registry::moon_phase::MoonPhase;
 use steel_registry::timeline::{Ease, KeyframeValue, TimelineRef, Track};
 use steel_registry::{REGISTRY, RegistryExt as _, TaggedRegistryExt as _};
 use steel_utils::Identifier;
@@ -54,6 +56,19 @@ pub(super) fn sun_angle_degrees(
     )
 }
 
+/// Evaluates Vanilla's non-interpolated moon-phase environment attribute.
+#[must_use]
+pub(super) fn moon_phase(
+    dimension_type: DimensionTypeRef,
+    clock_manager: &WorldClockManager,
+) -> MoonPhase {
+    let mut phase = MOON_PHASE.default_value;
+    for_each_dimension_timeline(dimension_type, |timeline| {
+        phase = apply_timeline_moon_phase(phase, timeline, clock_manager);
+    });
+    phase
+}
+
 #[must_use]
 pub(super) fn sky_darkening(sky_light_level: f32) -> u8 {
     (MAX_SKY_LIGHT_LEVEL - sky_light_level.clamp(MIN_SKY_LIGHT_LEVEL, MAX_SKY_LIGHT_LEVEL)) as u8
@@ -65,25 +80,35 @@ fn apply_timeline_float_attribute(
     clock_manager: &WorldClockManager,
     attribute: &str,
 ) -> f32 {
+    for_each_dimension_timeline(dimension_type, |timeline| {
+        value = apply_timeline_float_track(value, timeline, clock_manager, attribute);
+    });
+    value
+}
+
+fn for_each_dimension_timeline(
+    dimension_type: DimensionTypeRef,
+    mut action: impl FnMut(TimelineRef),
+) {
     let Some(timelines) = dimension_type.timelines else {
-        return value;
+        return;
     };
     if let Some(tag) = timelines.strip_prefix('#') {
         let Ok(tag) = Identifier::from_str(tag) else {
-            return value;
+            return;
         };
         for timeline in REGISTRY.timelines.iter_tag(&tag) {
-            value = apply_timeline_float_track(value, timeline, clock_manager, attribute);
+            action(timeline);
         }
-        return value;
+        return;
     }
 
     let Ok(key) = Identifier::from_str(timelines) else {
-        return value;
+        return;
     };
-    REGISTRY.timelines.by_key(&key).map_or(value, |timeline| {
-        apply_timeline_float_track(value, timeline, clock_manager, attribute)
-    })
+    if let Some(timeline) = REGISTRY.timelines.by_key(&key) {
+        action(timeline);
+    }
 }
 
 fn apply_timeline_float_track(
@@ -106,6 +131,58 @@ fn apply_timeline_float_track(
         Some("multiply") => value * sample,
         None => sample,
         _ => value,
+    }
+}
+
+fn apply_timeline_moon_phase(
+    value: MoonPhase,
+    timeline: TimelineRef,
+    clock_manager: &WorldClockManager,
+) -> MoonPhase {
+    let Some(track) = timeline
+        .tracks
+        .iter()
+        .find(|track| track.name == MOON_PHASE.key)
+    else {
+        return value;
+    };
+    if track.modifier.is_some() {
+        return value;
+    }
+    let Some(total_ticks) = clock_manager.total_ticks(timeline.clock) else {
+        return value;
+    };
+    let Some(timeline_value) =
+        sample_string_track(track, timeline.period_ticks.map(i64::from), total_ticks)
+    else {
+        return value;
+    };
+    match MoonPhase::from_timeline_value(timeline_value) {
+        Some(phase) => phase,
+        None => value,
+    }
+}
+
+fn sample_string_track(
+    track: &Track,
+    period_ticks: Option<i64>,
+    ticks: i64,
+) -> Option<&'static str> {
+    let first = track.keyframes.first()?;
+    let sample_ticks = period_ticks.map_or(ticks, |period| ticks.rem_euclid(period));
+    let sampled_keyframe = track
+        .keyframes
+        .iter()
+        .rev()
+        .find(|keyframe| keyframe.ticks <= sample_ticks)
+        .or_else(|| period_ticks.map(|_| &track.keyframes[track.keyframes.len() - 1]));
+    let keyframe = match sampled_keyframe {
+        Some(keyframe) => keyframe,
+        None => first,
+    };
+    match keyframe.value {
+        KeyframeValue::String(value) => Some(value),
+        _ => None,
     }
 }
 
@@ -294,6 +371,7 @@ fn lerp(alpha: f32, from: f32, to: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use steel_registry::init_vanilla_registry;
+    use steel_registry::moon_phase::{MOON_PHASE_LENGTH_TICKS, MoonPhase};
     use steel_registry::vanilla_dimension_types::{OVERWORLD, THE_NETHER};
     use steel_registry::vanilla_world_clocks;
 
@@ -306,6 +384,10 @@ mod tests {
     const OVERWORLD_SUNSET_TICKS: i64 = 12_000;
     const OVERWORLD_SUNSET_INTERPOLATION_TICKS: i64 = 12_768;
     const OVERWORLD_MIDNIGHT_TICKS: i64 = 18_000;
+    const MOON_CYCLE_START_TICKS: i64 = 0;
+    const LAST_TICK_OF_PHASE: i64 = MOON_PHASE_LENGTH_TICKS - 1;
+    const NEW_MOON_START_TICKS: i64 = MOON_PHASE_LENGTH_TICKS * MoonPhase::NewMoon.index() as i64;
+    const MOON_CYCLE_TICKS: i64 = MOON_PHASE_LENGTH_TICKS * MoonPhase::COUNT as i64;
 
     fn assert_f32_close(left: f32, right: f32) {
         assert!(
@@ -432,6 +514,36 @@ mod tests {
                 false,
             ),
             4.0,
+        );
+    }
+
+    #[test]
+    fn moon_phase_uses_generated_timeline_boundaries() {
+        init_vanilla_registry();
+
+        assert_eq!(
+            moon_phase(&OVERWORLD, &clock_manager_at(MOON_CYCLE_START_TICKS)),
+            MoonPhase::FullMoon
+        );
+        assert_eq!(
+            moon_phase(&OVERWORLD, &clock_manager_at(LAST_TICK_OF_PHASE)),
+            MoonPhase::FullMoon
+        );
+        assert_eq!(
+            moon_phase(&OVERWORLD, &clock_manager_at(MOON_PHASE_LENGTH_TICKS)),
+            MoonPhase::WaningGibbous
+        );
+        assert_eq!(
+            moon_phase(&OVERWORLD, &clock_manager_at(NEW_MOON_START_TICKS)),
+            MoonPhase::NewMoon
+        );
+        assert_eq!(
+            moon_phase(&OVERWORLD, &clock_manager_at(MOON_CYCLE_TICKS)),
+            MoonPhase::FullMoon
+        );
+        assert_eq!(
+            moon_phase(&OVERWORLD, &clock_manager_at(-1)),
+            MoonPhase::WaxingGibbous
         );
     }
 

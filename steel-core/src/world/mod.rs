@@ -109,6 +109,7 @@ mod block_updates;
 mod border;
 mod broadcasts;
 pub(crate) mod clock;
+mod difficulty;
 mod entity_management;
 mod environment;
 mod events;
@@ -141,6 +142,7 @@ pub(crate) use block_region::{BlockRegionBounds, MAX_BLOCK_REGION_WORKSET_SLOTS}
 use block_updates::CollectingNeighborUpdater;
 pub use border::WorldBorderError;
 use border::{WorldBorder, WorldBorderSnapshot};
+pub use difficulty::DifficultyInstance;
 use entity_management::NavigatingMobTracker;
 #[cfg(test)]
 use entity_management::nearest_player_distance_in_range;

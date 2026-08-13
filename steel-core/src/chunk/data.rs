@@ -2,7 +2,7 @@
 use std::fmt::{self, Formatter};
 use std::sync::{
     Arc, OnceLock, Weak,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicI64, Ordering},
 };
 
 use parking_lot::{MappedRwLockWriteGuard, RwLockReadGuard, RwLockWriteGuard};
@@ -38,6 +38,9 @@ use crate::world::tick_scheduler::{
 };
 use crate::worldgen::carving_mask::CarvingMask;
 use steel_worldgen::structure::{StructureReferenceMap, StructureStartMap};
+
+/// Inhabited time assigned to a newly generated chunk.
+pub const DEFAULT_INHABITED_TIME: i64 = 0;
 
 pub(crate) fn empty_postprocessing(height: i32) -> Box<[Vec<u16>]> {
     let section_count = (height / 16) as usize;
@@ -81,6 +84,8 @@ pub struct Chunk {
     /// Whether the chunk has been modified since last save.
     /// Newly generated chunks start dirty.
     pub dirty: AtomicBool,
+    /// Total game ticks spent in Vanilla's inhabited chunk set.
+    inhabited_time: AtomicI64,
     /// Heightmaps retained across every generation phase.
     pub(crate) heightmaps: SyncRwLock<ChunkHeightmaps>,
     /// The minimum Y coordinate of the world this chunk belongs to.
@@ -132,6 +137,7 @@ impl Chunk {
             sections,
             pos,
             dirty: AtomicBool::new(true), // New chunks are always dirty
+            inhabited_time: AtomicI64::new(DEFAULT_INHABITED_TIME),
             heightmaps: SyncRwLock::new(ChunkHeightmaps::empty()),
             min_y,
             height,
@@ -169,6 +175,7 @@ impl Chunk {
         sections: Sections,
         pos: ChunkPos,
         status: ChunkStatus,
+        inhabited_time: i64,
         min_y: i32,
         height: i32,
         heightmaps: ChunkHeightmaps,
@@ -189,6 +196,7 @@ impl Chunk {
             sections,
             pos,
             dirty: AtomicBool::new(false),
+            inhabited_time: AtomicI64::new(inhabited_time),
             heightmaps: SyncRwLock::new(heightmaps),
             min_y,
             height,
@@ -256,6 +264,29 @@ impl Chunk {
     /// Marks this chunk as needing persistence.
     pub fn mark_dirty(&self) {
         self.dirty.store(true, Ordering::Release);
+    }
+
+    /// Returns the number of game ticks this chunk has been inhabited.
+    #[must_use]
+    pub fn inhabited_time(&self) -> i64 {
+        self.inhabited_time.load(Ordering::Acquire)
+    }
+
+    /// Replaces this chunk's inhabited time and makes the value persistent.
+    pub fn set_inhabited_time(&self, inhabited_time: i64) {
+        if self.inhabited_time.swap(inhabited_time, Ordering::AcqRel) != inhabited_time {
+            self.mark_dirty();
+        }
+    }
+
+    /// Adds an elapsed game-time delta to this chunk's inhabited time.
+    pub(crate) fn increment_inhabited_time(&self, elapsed_game_ticks: i64) {
+        if elapsed_game_ticks == 0 {
+            return;
+        }
+        self.inhabited_time
+            .fetch_add(elapsed_game_ticks, Ordering::AcqRel);
+        self.mark_dirty();
     }
 
     /// Clears the dirty flag and returns its previous value.

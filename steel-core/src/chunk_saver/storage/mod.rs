@@ -702,6 +702,7 @@ impl ChunkStorage {
 
         let persistent = Self::to_persistent(
             chunk.sections(),
+            chunk.inhabited_time(),
             &block_entities,
             &pending_block_entities,
             &entities,
@@ -758,6 +759,7 @@ impl ChunkStorage {
     )]
     fn to_persistent(
         sections: &Sections,
+        inhabited_time: i64,
         block_entities: &[SharedBlockEntity],
         pending_block_entities: &[BlockPos],
         entities: &[SharedEntity],
@@ -819,6 +821,7 @@ impl ChunkStorage {
             last_modified: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs() as u32),
+            inhabited_time,
             block_states: builder.block_states,
             biomes: builder.biomes,
             sections: persistent_sections,

@@ -692,7 +692,12 @@ mod tests {
     };
 
     use super::*;
+    use crate::chunk::{
+        Chunk, DEFAULT_INHABITED_TIME,
+        section::{ChunkSection, Sections},
+    };
     use crate::chunk_saver::{PersistentChunk, PersistentLightData};
+    use steel_registry::init_vanilla_registry;
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -761,6 +766,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inhabited_time_survives_region_manager_restart() {
+        const STORED_INHABITED_TIME: i64 = 3_600_000;
+        const MIN_Y: i32 = 0;
+        const WORLD_HEIGHT: i32 = 16;
+
+        init_vanilla_registry();
+
+        let directory = test_directory("inhabited-time-restart");
+        let pos = ChunkPos::new(2, -1);
+        let chunk = Chunk::new(
+            Sections::from_owned(vec![ChunkSection::new_empty()].into_boxed_slice()),
+            pos,
+            MIN_Y,
+            WORLD_HEIGHT,
+            Weak::new(),
+        );
+        chunk.set_inhabited_time(STORED_INHABITED_TIME);
+        let Some(prepared) =
+            ChunkStorage::prepare_chunk_save(&chunk, ChunkStatus::Empty, &[], false)
+        else {
+            panic!("changed inhabited time should prepare a disk save");
+        };
+
+        let manager = RegionManager::new(&directory);
+        let Ok(saved) = manager.save_chunk_data(prepared, &test_thread_pool()).await else {
+            panic!("chunk should save before restart");
+        };
+        assert!(saved);
+        assert!(manager.close_all().await.is_ok());
+        drop(manager);
+
+        let restarted = RegionManager::new(&directory);
+        let Ok(acquired) = restarted.acquire_chunk(pos).await else {
+            panic!("restarted manager should acquire chunk");
+        };
+        assert!(acquired);
+        let Ok(Some(loaded)) = restarted
+            .load_chunk(pos, MIN_Y, WORLD_HEIGHT, Weak::new(), &test_thread_pool())
+            .await
+        else {
+            panic!("saved chunk should load after restart");
+        };
+        assert_eq!(loaded.chunk.inhabited_time(), STORED_INHABITED_TIME);
+
+        assert!(restarted.release_chunk(pos).await.is_ok());
+        assert!(restarted.close_all().await.is_ok());
+        assert!(fs::remove_dir_all(directory).await.is_ok());
+    }
+
+    #[tokio::test]
     async fn invalid_zstd_payload_is_removed_for_regeneration() {
         let directory = test_directory("zstd");
         let pos = ChunkPos::new(0, 0);
@@ -810,6 +865,7 @@ mod tests {
         let pos = ChunkPos::new(0, 0);
         let persistent = PersistentChunk {
             last_modified: 0,
+            inhabited_time: DEFAULT_INHABITED_TIME,
             block_states: Vec::new(),
             biomes: Vec::new(),
             sections: Vec::new(),
