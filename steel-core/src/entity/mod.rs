@@ -754,6 +754,7 @@ mod living_base;
 mod living_entity;
 mod manager;
 mod mob;
+mod monster;
 mod movement_sync;
 pub mod projectile;
 mod registry;
@@ -801,6 +802,12 @@ pub use manager::{
     EntityMoveUpdate, EntityOwnership, EntityVisibility, WorldEntityManager,
 };
 pub(crate) use mob::{Mob, MobBase, PathfinderMob};
+#[cfg(test)]
+pub(crate) use monster::tests::TestMonster;
+pub use monster::{
+    Enemy, Monster, MonsterBase, MonsterSpawnLevel, XP_REWARD_BOSS, XP_REWARD_HUGE,
+    XP_REWARD_LARGE, XP_REWARD_MEDIUM, XP_REWARD_NONE, XP_REWARD_SMALL,
+};
 pub use movement_sync::{
     EntityMovementSyncPacket, EntityMovementSyncPackets, EntityMovementSyncState,
     EntityMovementSyncUpdate, EntityPositionRotSyncPacket, EntityPositionSyncDecision,
@@ -814,7 +821,8 @@ pub use projectile::{
     compute_margin, get_hit_result_on_view_vector,
 };
 pub use registry::{ENTITIES, EntityLoadRequest, EntityRegistry, init_entities};
-pub(crate) use spawn::{AgeableMobGroupData, EntitySpawnReason, SpawnGroupData};
+pub(crate) use spawn::{AgeableMobGroupData, SpawnGroupData};
+pub use spawn::{EntitySpawnReason, entity_type_allowed_in_difficulty};
 pub(crate) use storage::{EntityStorage, EntityStorageAddResult};
 pub use synced_data::{EntitySyncedData, LivingEntitySyncedData};
 pub(crate) use ticking::{

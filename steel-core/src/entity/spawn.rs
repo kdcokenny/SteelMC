@@ -1,34 +1,68 @@
+use steel_registry::entity_type::EntityTypeRef;
+use steel_utils::types::Difficulty;
+
+/// Returns the difficulty gate at the start of vanilla
+/// `SpawnPlacements.checkSpawnRules`.
+#[must_use]
+pub fn entity_type_allowed_in_difficulty(
+    entity_type: EntityTypeRef,
+    difficulty: Difficulty,
+) -> bool {
+    entity_type.allowed_in_peaceful || difficulty != Difficulty::Peaceful
+}
+
 /// Vanilla `EntitySpawnReason`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntitySpawnReason {
+    /// Natural world spawning.
     Natural,
+    /// Mob spawning during chunk generation.
     ChunkGeneration,
+    /// A standard mob spawner.
     Spawner,
+    /// Structure-owned spawning.
     Structure,
+    /// Offspring created by breeding.
     Breeding,
+    /// A mob summoned by another mob.
     MobSummoned,
+    /// A jockey or other mounted spawn.
     Jockey,
+    /// Event-owned spawning.
     Event,
+    /// Conversion from another entity type.
     Conversion,
+    /// Reinforcement spawning.
     Reinforcement,
+    /// Triggered spawning.
     Triggered,
+    /// An entity released from a bucket.
     Bucket,
+    /// Spawning caused by item use.
     SpawnItemUse,
+    /// Spawning caused by a command.
     Command,
+    /// Spawning caused by a dispenser.
     Dispenser,
+    /// Patrol spawning.
     Patrol,
+    /// A trial spawner.
     TrialSpawner,
+    /// Loading a persisted entity.
     Load,
+    /// Arrival after dimension travel.
     DimensionTravel,
 }
 
 impl EntitySpawnReason {
     #[must_use]
+    /// Returns vanilla `EntitySpawnReason.isSpawner`.
     pub const fn is_spawner(self) -> bool {
         matches!(self, Self::Spawner | Self::TrialSpawner)
     }
 
     #[must_use]
+    /// Returns vanilla `EntitySpawnReason.ignoresLightRequirements`.
     pub const fn ignores_light_requirements(self) -> bool {
         matches!(self, Self::TrialSpawner)
     }

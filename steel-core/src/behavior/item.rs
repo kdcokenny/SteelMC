@@ -190,6 +190,17 @@ pub trait ItemBehavior: Send + Sync {
             .get_weapon()
             .map(|weapon| weapon.item_damage_per_attack)
     }
+
+    /// Returns this behavior as vanilla `ProjectileWeaponItem` when supported.
+    fn as_projectile_weapon(&self) -> Option<&dyn ProjectileWeaponItem> {
+        None
+    }
+}
+
+/// Capability implemented by vanilla projectile-weapon item classes.
+pub trait ProjectileWeaponItem: ItemBehavior {
+    /// Returns vanilla `ProjectileWeaponItem.getSupportedHeldProjectiles`.
+    fn supports_held_projectile(&self, projectile: &ItemStack) -> bool;
 }
 
 /// Registry for item behaviors.

@@ -2,6 +2,7 @@ use rustc_hash::FxHashMap;
 use simdnbt::ToNbtTag;
 use simdnbt::owned::NbtTag;
 use steel_utils::Identifier;
+use steel_utils::random::Random;
 
 use crate::sound_event::SoundEventRef;
 use crate::world_clock::WorldClockRef;
@@ -128,6 +129,26 @@ pub enum MonsterSpawnLightLevel {
         min_inclusive: i32,
         max_inclusive: i32,
     },
+}
+
+impl MonsterSpawnLightLevel {
+    /// Samples vanilla `DimensionType.monsterSpawnLightTest`.
+    pub fn sample(&self, random: &mut impl Random) -> i32 {
+        match self {
+            Self::Simple(value) => *value,
+            Self::Complex {
+                distribution_type,
+                min_inclusive,
+                max_inclusive,
+            } => {
+                assert_eq!(
+                    *distribution_type, "minecraft:uniform",
+                    "unsupported monster spawn light distribution"
+                );
+                random.next_i32_between(*min_inclusive, *max_inclusive)
+            }
+        }
+    }
 }
 
 impl ToNbtTag for &DimensionType {
@@ -317,6 +338,41 @@ impl ToNbtTag for &DimensionType {
         }
 
         NbtTag::Compound(compound)
+    }
+}
+
+#[cfg(test)]
+mod monster_spawn_light_tests {
+    use steel_utils::random::legacy_random::LegacyRandom;
+
+    use super::MonsterSpawnLightLevel;
+
+    const FIXED_MONSTER_SPAWN_LIGHT: i32 = 7;
+    const MIN_UNIFORM_MONSTER_SPAWN_LIGHT: i32 = 0;
+    const MAX_UNIFORM_MONSTER_SPAWN_LIGHT: i32 = 7;
+    const DETERMINISTIC_LIGHT_SAMPLE_SEED: u64 = 26_02;
+    const UPPER_INCLUSIVE_BOUND_SAMPLE_SEED: u64 = 2_048;
+
+    #[test]
+    fn simple_monster_spawn_light_level_returns_its_fixed_value() {
+        let level = MonsterSpawnLightLevel::Simple(FIXED_MONSTER_SPAWN_LIGHT);
+        let mut random = LegacyRandom::from_seed(DETERMINISTIC_LIGHT_SAMPLE_SEED);
+
+        assert_eq!(level.sample(&mut random), FIXED_MONSTER_SPAWN_LIGHT);
+    }
+
+    #[test]
+    fn uniform_monster_spawn_light_level_can_sample_its_inclusive_upper_bound() {
+        let level = MonsterSpawnLightLevel::Complex {
+            distribution_type: "minecraft:uniform",
+            min_inclusive: MIN_UNIFORM_MONSTER_SPAWN_LIGHT,
+            max_inclusive: MAX_UNIFORM_MONSTER_SPAWN_LIGHT,
+        };
+        let mut random = LegacyRandom::from_seed(UPPER_INCLUSIVE_BOUND_SAMPLE_SEED);
+
+        let sampled = level.sample(&mut random);
+
+        assert_eq!(sampled, MAX_UNIFORM_MONSTER_SPAWN_LIGHT);
     }
 }
 

@@ -4,7 +4,7 @@ use steel_registry::{
     blocks::{block_state_ext::BlockStateExt as _, properties::BlockStateProperties},
     dimension_type::BedRuleValue,
 };
-use steel_utils::{BlockPos, Direction};
+use steel_utils::{BlockPos, Direction, WorldAabb};
 use text_components::{TextComponent, translation::TranslatedMessage};
 
 use super::{Player, PlayerRespawnConfig};
@@ -16,6 +16,8 @@ use crate::{
 
 const BED_INTERACTION_XZ_RANGE: f64 = 3.0;
 const BED_INTERACTION_Y_RANGE: f64 = 2.0;
+const REST_PREVENTION_HORIZONTAL_RANGE: f64 = 8.0;
+const REST_PREVENTION_VERTICAL_RANGE: f64 = 5.0;
 
 #[derive(Debug)]
 pub(crate) enum BedSleepingProblem {
@@ -109,6 +111,27 @@ impl Player {
         !self.get_world().get_block_state(pos).is_suffocating()
     }
 
+    fn monster_prevents_rest_near_bed(&self, world: &World, pos: BlockPos) -> bool {
+        let bed_center = DVec3::new(
+            f64::from(pos.x()) + 0.5,
+            f64::from(pos.y()),
+            f64::from(pos.z()) + 0.5,
+        );
+        let search_area = WorldAabb::new(
+            bed_center.x - REST_PREVENTION_HORIZONTAL_RANGE,
+            bed_center.y - REST_PREVENTION_VERTICAL_RANGE,
+            bed_center.z - REST_PREVENTION_HORIZONTAL_RANGE,
+            bed_center.x + REST_PREVENTION_HORIZONTAL_RANGE,
+            bed_center.y + REST_PREVENTION_VERTICAL_RANGE,
+            bed_center.z + REST_PREVENTION_HORIZONTAL_RANGE,
+        );
+        world.has_entity_in_aabb_matching(&search_area, |entity| {
+            entity
+                .as_monster()
+                .is_some_and(|monster| monster.is_preventing_player_rest(world, self))
+        })
+    }
+
     pub(crate) fn stop_sleep_in_bed(&self, forceful_wakeup: bool, update_level_list: bool) {
         if self.is_sleeping() {
             let packet = CAnimate::new(self.id(), AnimateAction::WakeUp);
@@ -181,8 +204,17 @@ impl Player {
             return Err(self.bed_sleep_problem());
         }
 
-        // TODO: Mirror vanilla Monster::isPreventingPlayerRest once Steel has
-        // the required Monster capability/class foundation.
+        if !self.has_infinite_materials() && self.monster_prevents_rest_near_bed(&world, pos) {
+            return Err(BedSleepingProblem::Message(Box::new(
+                TranslatedMessage {
+                    key: "block.minecraft.bed.not_safe".into(),
+                    fallback: None,
+                    args: None,
+                }
+                .component(),
+            )));
+        }
+
         self.set_sleep_counter(0);
         if self.start_sleeping(pos).is_err() {
             return Err(BedSleepingProblem::OtherProblem);
@@ -257,10 +289,22 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
-    use glam::DVec3;
-    use steel_utils::{BlockPos, Direction};
+    use std::sync::Arc;
 
-    use super::Player;
+    use glam::DVec3;
+    use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_world_clocks};
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{BlockPos, ChunkPos, Direction};
+    use uuid::Uuid;
+
+    use super::{Player, TranslatedMessage};
+    use crate::behavior::init_behaviors;
+    use crate::entity::{Entity, SharedEntity, TestMonster};
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
+
+    const NIGHT_TIME_TICKS: i64 = 13_000;
+    const PLAYER_ENTITY_ID: i32 = 1;
+    const MONSTER_ENTITY_ID: i32 = 2;
 
     #[test]
     fn sleep_admission_rejects_a_player_outside_vanilla_range() {
@@ -301,5 +345,44 @@ mod tests {
             direction,
             |pos| pos != above_foot,
         ));
+    }
+
+    #[test]
+    fn nearby_monster_capability_prevents_rest_through_sleep_admission() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world = fresh_test_world("nearby_monster_prevents_rest");
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+        assert_eq!(
+            world.set_clock_total_ticks(&vanilla_world_clocks::OVERWORLD, NIGHT_TIME_TICKS),
+            Some(())
+        );
+        let bed_pos = BlockPos::new(0, 64, 0);
+        assert!(world.set_block(
+            bed_pos,
+            vanilla_blocks::RED_BED.default_state(),
+            UpdateFlags::UPDATE_NONE,
+        ));
+
+        let player =
+            TestPlayerBuilder::new(Arc::clone(&world), Uuid::nil(), "sleeper", PLAYER_ENTITY_ID)
+                .build();
+        assert!(player.try_set_position(DVec3::new(0.5, 64.0, 0.5)).is_ok());
+        let monster: SharedEntity = Arc::new(TestMonster::in_world(
+            MONSTER_ENTITY_ID,
+            DVec3::new(1.5, 64.0, 0.5),
+            &world,
+        ));
+        assert!(world.try_add_entity(monster).is_ok());
+
+        let not_safe_message = TranslatedMessage {
+            key: "block.minecraft.bed.not_safe".into(),
+            fallback: None,
+            args: None,
+        }
+        .component();
+        let result = player.start_sleep_in_bed(bed_pos);
+
+        assert!(result.is_err_and(|problem| problem.message() == Some(&not_safe_message)));
     }
 }

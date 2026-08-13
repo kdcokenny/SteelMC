@@ -1457,6 +1457,26 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         try_as_dyn::<Self, dyn LivingEntity>(self)
     }
 
+    /// Returns true for entities implementing vanilla's `Enemy` interface.
+    fn is_enemy(&self) -> bool {
+        self.as_enemy().is_some()
+    }
+
+    /// Returns this entity as vanilla `Enemy` when it has that capability.
+    fn as_enemy(&self) -> Option<&dyn Enemy> {
+        try_as_dyn::<Self, dyn Enemy>(self)
+    }
+
+    /// Returns true for entities implementing vanilla `Monster` behavior.
+    fn is_monster(&self) -> bool {
+        self.as_monster().is_some()
+    }
+
+    /// Returns this entity as vanilla `Monster` when it has that capability.
+    fn as_monster(&self) -> Option<&dyn Monster> {
+        try_as_dyn::<Self, dyn Monster>(self)
+    }
+
     /// Returns this entity as an item frame when it has item-frame behavior.
     ///
     /// Mirrors vanilla's `instanceof ItemFrame` branches.
@@ -1694,6 +1714,10 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
 
     /// Returns vanilla small and big fall sounds for this entity.
     fn fall_sounds(&self) -> (SoundEventRef, SoundEventRef) {
+        if let Some(monster) = self.as_monster() {
+            return monster.monster_fall_sounds();
+        }
+
         (
             &sound_events::ENTITY_GENERIC_SMALL_FALL,
             &sound_events::ENTITY_GENERIC_BIG_FALL,
@@ -2751,12 +2775,38 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
 
     /// Returns this entity's vanilla sound source category.
     fn sound_source(&self) -> SoundSource {
-        SoundSource::Neutral
+        self.as_monster()
+            .map_or(SoundSource::Neutral, Monster::monster_sound_source)
     }
 
     /// Returns this entity's vanilla swim sound.
     fn swim_sound(&self) -> SoundEventRef {
-        &sound_events::ENTITY_GENERIC_SWIM
+        self.as_monster().map_or(
+            &sound_events::ENTITY_GENERIC_SWIM,
+            Monster::monster_swim_sound,
+        )
+    }
+
+    /// Returns this entity's vanilla swim splash sound.
+    fn swim_splash_sound(&self) -> SoundEventRef {
+        self.as_monster().map_or(
+            &sound_events::ENTITY_GENERIC_SPLASH,
+            Monster::monster_swim_splash_sound,
+        )
+    }
+
+    /// Returns vanilla `Entity.getLightLevelDependentMagicValue` at eye height.
+    fn light_level_dependent_magic_value(&self) -> f32 {
+        let Some(world) = self.level() else {
+            return 0.0;
+        };
+        let position = self.position();
+        let eye_pos = BlockPos::containing(position.x, self.get_eye_y(), position.z);
+        if !world.is_full_chunk_loaded_at(eye_pos) {
+            return 0.0;
+        }
+
+        world.light_level_dependent_magic_value(eye_pos)
     }
 
     /// Returns whether sounds from this entity are suppressed.

@@ -309,12 +309,18 @@ pub trait LivingEntity: Entity {
 
     /// Returns vanilla `LivingEntity.getHurtSound`.
     fn hurt_sound(&self, _source: &DamageSource) -> Option<SoundEventRef> {
-        Some(&sound_events::ENTITY_GENERIC_HURT)
+        Some(self.as_monster().map_or(
+            &sound_events::ENTITY_GENERIC_HURT,
+            Monster::monster_hurt_sound,
+        ))
     }
 
     /// Returns vanilla `LivingEntity.getDeathSound`.
     fn death_sound(&self) -> Option<SoundEventRef> {
-        Some(&sound_events::ENTITY_GENERIC_DEATH)
+        Some(self.as_monster().map_or(
+            &sound_events::ENTITY_GENERIC_DEATH,
+            Monster::monster_death_sound,
+        ))
     }
 
     /// Runs vanilla `LivingEntity.makeSound`.
@@ -886,12 +892,16 @@ pub trait LivingEntity: Entity {
 
     /// Returns vanilla `LivingEntity.shouldDropLoot`.
     fn should_drop_loot(&self, world: &World) -> bool {
-        !self.is_baby() && world.get_game_rule(&MOB_DROPS)
+        self.as_monster().map_or_else(
+            || !self.is_baby() && world.get_game_rule(&MOB_DROPS),
+            |monster| monster.monster_should_drop_loot(world),
+        )
     }
 
     /// Returns vanilla `LivingEntity.shouldDropExperience`.
     fn should_drop_experience(&self) -> bool {
-        !self.is_baby()
+        self.as_monster()
+            .map_or_else(|| !self.is_baby(), Monster::monster_should_drop_experience)
     }
 
     /// Returns vanilla `LivingEntity.isAlwaysExperienceDropper`.
@@ -2185,7 +2195,15 @@ pub trait LivingEntity: Entity {
 
     /// Mirrors vanilla `LivingEntity.aiStep()`.
     fn ai_step(&self) -> Option<MoveResult> {
-        self.default_ai_step()
+        self.as_monster()
+            .map_or_else(|| self.default_ai_step(), Monster::ai_step_monster)
+    }
+
+    /// Returns vanilla `LivingEntity.getProjectile`.
+    fn get_projectile(&self, held_weapon: &ItemStack) -> ItemStack {
+        self.as_monster().map_or_else(ItemStack::empty, |monster| {
+            monster.monster_projectile(held_weapon)
+        })
     }
 
     /// Mirrors vanilla `LivingEntity.pushEntities()`.

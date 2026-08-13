@@ -756,8 +756,7 @@ pub trait Mob: LivingEntity {
     }
 
     fn can_be_leashed(&self) -> bool {
-        // TODO: Return false for enemy mobs once hostile mob foundations exist.
-        true
+        !self.is_enemy()
     }
 
     fn leash_distance_to(&self, holder: &dyn Entity) -> f64 {
