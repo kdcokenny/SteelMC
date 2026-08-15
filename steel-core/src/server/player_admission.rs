@@ -2,7 +2,7 @@ use super::{
     Arc, CPlayerInfoUpdate, CRemovePlayerInfo, ClientPacket, ConnectionProtocol, DomainPlayerState,
     EncodedPacket, Entity, GlobalPlayerData, Instant, JoinSet, NetworkConnection,
     PendingWorldChangeToken, PersistentPlayerData, Player, ResetReason, SegQueue, Server,
-    SyncMutex, Uuid, mpsc,
+    SyncMutex, Uuid, mpsc, translations,
 };
 
 pub(super) struct PendingPlayerJoin {
@@ -91,6 +91,36 @@ impl PlayerDisconnectQueue {
 }
 
 impl Server {
+    /// Disconnects an older session with the same UUID and waits for its admission lifecycle.
+    ///
+    /// Vanilla performs this during verified login and does not enter configuration until the
+    /// older player has left its global player list. Steel also waits for the asynchronous save
+    /// reservation so the replacement cannot race the older session's persistence.
+    pub async fn disconnect_duplicate_player_and_wait(&self, uuid: Uuid) {
+        loop {
+            let admission_changed = self.player_admission_changed.notified();
+            tokio::pin!(admission_changed);
+            let _ = admission_changed.as_mut().enable();
+            let existing = self.online_players.get_by_uuid(&uuid);
+            let admission_active = self.player_admissions.lock().contains_key(&uuid);
+
+            if existing.is_none() && !admission_active {
+                return;
+            }
+
+            if let Some(existing) = existing
+                && !existing.connection.closed()
+            {
+                existing.disconnect(translations::MULTIPLAYER_DISCONNECT_DUPLICATE_LOGIN.msg());
+            }
+
+            tokio::select! {
+                () = &mut admission_changed => {}
+                () = self.cancel_token.cancelled() => return,
+            }
+        }
+    }
+
     /// Queues initial player join work.
     ///
     /// Persistent data is loaded asynchronously, then world insertion is finalized at the
@@ -214,6 +244,8 @@ impl Server {
 
         let admitted = self.online_players.insert(player);
         let _ = admissions.remove(&uuid);
+        drop(admissions);
+        self.player_admission_changed.notify_waiters();
         admitted
     }
 
@@ -274,11 +306,15 @@ impl Server {
         let mut admissions = self.player_admissions.lock();
         if admissions.get(&uuid) == Some(&state) {
             let _ = admissions.remove(&uuid);
+            drop(admissions);
+            self.player_admission_changed.notify_waiters();
         }
     }
 
     fn remove_online_player_sync(&self, player: &Arc<Player>) {
-        let _ = self.online_players.remove_player_sync(player);
+        if self.online_players.remove_player_sync(player).is_some() {
+            self.player_admission_changed.notify_waiters();
+        }
     }
 
     pub(crate) fn queue_player_disconnect(&self, player: Arc<Player>) {
@@ -412,6 +448,9 @@ impl Server {
         // Vanilla broadcasts before removing the player from its global player list.
         self.broadcast_player_leave_message(&player);
         let player = self.online_players.remove_player_sync(&player);
+        if player.is_some() {
+            self.player_admission_changed.notify_waiters();
+        }
 
         let Some(player) = player else {
             self.release_player_admission(uuid, PlayerAdmissionState::Disconnecting);

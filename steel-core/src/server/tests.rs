@@ -21,10 +21,10 @@ use steel_registry::{
     vanilla_blocks, vanilla_dimension_types, vanilla_entities, vanilla_game_rules::RESPAWN_RADIUS,
     vanilla_items,
 };
-use steel_utils::{BlockPos, ChunkPos, types::UpdateFlags};
+use steel_utils::{BlockPos, ChunkPos, translations, types::UpdateFlags};
 use steel_utils::{codec::VarInt, serial::ReadFrom, text::DisplayResolutor};
 use text_components::TextComponent;
-use tokio::{fs, runtime::Builder, task::JoinSet, time::sleep};
+use tokio::{fs, runtime::Builder, sync::mpsc, task::JoinSet, time::sleep};
 use uuid::Uuid;
 
 use crate::behavior::init_behaviors;
@@ -40,9 +40,9 @@ use crate::permission::{
     PermissionGroupsConfig, PermissionKey, PermissionMetadataSet, PermissionSet,
     PermissionSubjectIndex, PermissionSubjectState,
 };
-use crate::player::connection::NetworkConnection;
+use crate::player::connection::{JavaConnection, JavaNetworkWriter, NetworkConnection};
 use crate::player::player_data::PersistentSlot;
-use crate::player::{Player, PlayerConnection, ResetReason};
+use crate::player::{ClientInformation, GameProfile, Player, PlayerConnection, ResetReason};
 use crate::portal::WorldChangeRequest;
 use crate::test_support::{
     TestPlayerBuilder, fresh_test_world, fresh_test_world_in_domain, insert_ready_full_chunk,
@@ -106,6 +106,40 @@ impl NetworkConnection for TestConnection {
 struct RecordingConnection {
     packets: Arc<SyncMutex<Vec<EncodedPacket>>>,
     closed: bool,
+}
+
+struct DisconnectRecordingConnection {
+    reasons: Arc<SyncMutex<Vec<TextComponent>>>,
+    closed: AtomicBool,
+}
+
+impl NetworkConnection for DisconnectRecordingConnection {
+    fn compression(&self) -> Option<CompressionInfo> {
+        None
+    }
+
+    fn send_encoded(&self, _packet: EncodedPacket) {}
+
+    fn send_encoded_bundle(&self, _packets: Vec<EncodedPacket>) {}
+
+    fn disconnect_with_reason(&self, reason: TextComponent) {
+        self.reasons.lock().push(reason);
+        self.closed.store(true, Ordering::Release);
+    }
+
+    fn tick(&self) {}
+
+    fn latency(&self) -> i32 {
+        0
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+
+    fn closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
 }
 
 impl NetworkConnection for RecordingConnection {
@@ -233,6 +267,7 @@ async fn test_server_with_worlds(
         worlds,
         online_players: PlayerMap::new(),
         player_admissions: SyncMutex::new(FxHashMap::default()),
+        player_admission_changed: Notify::new(),
         tick_rate_manager: SyncRwLock::new(TickRateManager::new()),
         scoreboards,
         command_storage,
@@ -2039,6 +2074,161 @@ fn test_player_with_packets(
     })));
     let player = test_player_with_connection(server, world, uuid, name, entity_id, connection);
     (player, sent_packets)
+}
+
+#[test]
+fn closed_java_connection_queues_cleanup_before_writer_release() {
+    let world = fresh_test_world("disconnect_before_writer_release");
+    let runtime = Builder::new_current_thread().enable_all().build();
+    let Ok(runtime) = runtime else {
+        panic!("test runtime should initialize");
+    };
+
+    runtime.block_on(async {
+        let storage_root = test_storage_root("disconnect-before-writer-release");
+        let server = test_server(
+            Arc::clone(&world),
+            PermissionSubjectIndex::new(),
+            &storage_root,
+        )
+        .await;
+        let Ok(server) = server else {
+            panic!("test server should initialize");
+        };
+
+        let network_writer: JavaNetworkWriter = Arc::new(AsyncMutex::new(None));
+        let writer_guard = network_writer.lock().await;
+        let (outgoing_packets, incoming_packets) = mpsc::unbounded_channel();
+        let cancel_token = CancellationToken::new();
+        let player = Arc::new_cyclic(|player| {
+            let connection = Arc::new(PlayerConnection::Java(JavaConnection::new(
+                outgoing_packets,
+                cancel_token.clone(),
+                None,
+                Arc::clone(&network_writer),
+                1,
+                Weak::clone(player),
+            )));
+            Player::new(
+                GameProfile {
+                    id: Uuid::from_u128(1),
+                    name: "BlockedWriter".to_owned(),
+                    properties: Vec::new(),
+                    profile_actions: None,
+                },
+                connection,
+                Arc::clone(&world),
+                Arc::downgrade(&server),
+                Arc::clone(&server.config),
+                1,
+                ClientInformation::default(),
+            )
+        });
+        assert!(server.online_players.insert(Arc::clone(&player)));
+        assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+        let _ = player.mark_joined_world();
+
+        let PlayerConnection::Java(connection) = player.connection.as_ref() else {
+            panic!("test player should use a Java connection");
+        };
+        cancel_token.cancel();
+        let sender = connection.sender(incoming_packets);
+        tokio::pin!(sender);
+        tokio::select! {
+            () = &mut sender => panic!("writer release should remain blocked by the test guard"),
+            () = sleep(Duration::from_millis(10)) => {}
+        }
+
+        let queued = server.process_player_disconnects();
+        assert_eq!(
+            queued.len(),
+            1,
+            "closed players must enter lifecycle cleanup before socket writer release"
+        );
+        assert!(
+            server
+                .online_players
+                .get_by_uuid(&player.gameprofile.id)
+                .is_none(),
+            "queued cleanup should detach the closed player"
+        );
+
+        drop(writer_guard);
+        sender.await;
+    });
+}
+
+#[test]
+fn duplicate_login_disconnects_old_player_and_waits_for_removal() {
+    let world = fresh_test_world("duplicate_login_takeover");
+    let runtime = Builder::new_current_thread().enable_all().build();
+    let Ok(runtime) = runtime else {
+        panic!("test runtime should initialize");
+    };
+
+    runtime.block_on(async {
+        let storage_root = test_storage_root("duplicate-login-takeover");
+        let server = test_server(
+            Arc::clone(&world),
+            PermissionSubjectIndex::new(),
+            &storage_root,
+        )
+        .await;
+        let Ok(server) = server else {
+            panic!("test server should initialize");
+        };
+
+        let reasons = Arc::new(SyncMutex::new(Vec::new()));
+        let connection = Arc::new(PlayerConnection::Other(Box::new(
+            DisconnectRecordingConnection {
+                reasons: Arc::clone(&reasons),
+                closed: AtomicBool::new(false),
+            },
+        )));
+        let uuid = Uuid::from_u128(1);
+        let existing = test_player_with_connection(
+            &server,
+            Arc::clone(&world),
+            uuid,
+            "ExistingPlayer",
+            1,
+            connection,
+        );
+        assert!(server.online_players.insert(Arc::clone(&existing)));
+        assert!(world.add_player(Arc::clone(&existing), ResetReason::InitialJoin));
+        let _ = existing.mark_joined_world();
+
+        let takeover = server.disconnect_duplicate_player_and_wait(uuid);
+        tokio::pin!(takeover);
+        tokio::select! {
+            () = &mut takeover => panic!("replacement must wait while the old player is online"),
+            () = sleep(Duration::from_millis(10)) => {}
+        }
+        assert!(existing.connection.closed());
+        {
+            let reasons = reasons.lock();
+            assert_eq!(reasons.len(), 1);
+            assert_eq!(
+                reasons[0],
+                translations::MULTIPLAYER_DISCONNECT_DUPLICATE_LOGIN
+                    .msg()
+                    .component()
+            );
+        }
+
+        assert!(
+            server
+                .process_player_disconnect(Arc::clone(&existing))
+                .is_some()
+        );
+        server.release_player_admission(uuid, PlayerAdmissionState::Disconnecting);
+        tokio::select! {
+            () = &mut takeover => {}
+            () = sleep(Duration::from_millis(100)) => {
+                panic!("replacement should proceed after the old player is removed");
+            }
+        }
+    });
 }
 
 fn decode_system_chat(packet: &EncodedPacket) -> TextComponent {

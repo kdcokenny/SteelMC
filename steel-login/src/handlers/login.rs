@@ -164,8 +164,6 @@ impl JavaTcpClient {
             }
         }
 
-        //TODO: Check for duplicate player UUID or name
-
         self.finish_login(profile)
             .await
             .with_reader_encryption(secret_key)
@@ -188,6 +186,11 @@ impl JavaTcpClient {
             .await;
             self.compression.store(Some(compression));
             action = ConnectionAction::reader_compression(compression);
+        }
+
+        tokio::select! {
+            () = self.server.disconnect_duplicate_player_and_wait(profile.id) => {}
+            () = self.cancel_token.cancelled() => return action,
         }
 
         self.send_bare_packet_now(CLoginFinished::new(
