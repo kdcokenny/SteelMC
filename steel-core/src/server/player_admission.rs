@@ -1,9 +1,16 @@
+use std::collections::hash_map::Entry;
+
+use tokio::time::{sleep, timeout};
+
 use super::{
-    Arc, CPlayerInfoUpdate, CRemovePlayerInfo, ClientPacket, ConnectionProtocol, DomainPlayerState,
-    EncodedPacket, Entity, GlobalPlayerData, Instant, JoinSet, NetworkConnection,
-    PendingWorldChangeToken, PersistentPlayerData, Player, ResetReason, SegQueue, Server,
-    SyncMutex, Uuid, mpsc,
+    Arc, CPlayerInfoUpdate, CRemovePlayerInfo, CancellationToken, ClientPacket, ConnectionProtocol,
+    DomainPlayerState, Duration, EncodedPacket, Entity, GlobalPlayerData, Instant, JoinSet,
+    NetworkConnection, PendingWorldChangeToken, PersistentPlayerData, Player, ResetReason,
+    SegQueue, Server, SyncMutex, Uuid, mpsc,
 };
+
+const DUPLICATE_LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
+const DUPLICATE_LOGIN_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(super) struct PendingPlayerJoin {
     pub(super) player: Arc<Player>,
@@ -21,6 +28,51 @@ pub(super) enum PlayerAdmissionState {
     Joining,
     Relocating,
     Disconnecting,
+}
+
+/// Failure to reserve a player's UUID for a replacement login.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlayerJoinReservationError {
+    /// The connection or server shut down while waiting.
+    Cancelled,
+    /// The previous session did not finish removal within vanilla's 600-tick budget at 20 TPS.
+    TimedOut,
+}
+
+/// Exclusive ownership of one UUID's pending player admission.
+///
+/// Dropping an unconsumed reservation releases the UUID immediately.
+pub struct PlayerJoinReservation {
+    server: Arc<Server>,
+    uuid: Uuid,
+    queued: bool,
+}
+
+impl PlayerJoinReservation {
+    /// Transfers this reservation to the asynchronous player-join pipeline.
+    pub fn queue_player_join(mut self, player: Arc<Player>) {
+        if player.gameprofile.id != self.uuid {
+            log::error!(
+                "Player join reservation UUID mismatch: reserved {}, got {}",
+                self.uuid,
+                player.gameprofile.id
+            );
+            player.disconnect("Invalid player identity");
+            return;
+        }
+
+        self.queued = true;
+        self.server.queue_reserved_player_join(player);
+    }
+}
+
+impl Drop for PlayerJoinReservation {
+    fn drop(&mut self) {
+        if !self.queued {
+            self.server
+                .release_player_admission(self.uuid, PlayerAdmissionState::Joining);
+        }
+    }
 }
 
 pub(super) struct PlayerJoinQueue {
@@ -104,6 +156,16 @@ impl Server {
             return;
         }
 
+        self.queue_reserved_player_join(player);
+    }
+
+    fn queue_reserved_player_join(self: &Arc<Self>, player: Arc<Player>) {
+        let uuid = player.gameprofile.id;
+        if player.connection.closed() {
+            self.release_player_admission(uuid, PlayerAdmissionState::Joining);
+            return;
+        }
+
         let server = Arc::clone(self);
         tokio::spawn(async move {
             let state = server.prepare_player_join(&player).await;
@@ -111,6 +173,68 @@ impl Server {
                 .pending_player_joins
                 .send(PendingPlayerJoin { player, state });
         });
+    }
+
+    /// Reserves a UUID for a new login, evicting and waiting for an existing session.
+    ///
+    /// The reservation remains held through player-data persistence so the replacement cannot
+    /// load stale state. The 30-second deadline matches vanilla's 600-tick budget at 20 TPS.
+    pub async fn reserve_replacement_player_join(
+        self: &Arc<Self>,
+        uuid: Uuid,
+        connection_cancel: &CancellationToken,
+    ) -> Result<PlayerJoinReservation, PlayerJoinReservationError> {
+        let wait_for_reservation = async {
+            let mut eviction_target: Option<Arc<Player>> = None;
+            loop {
+                if connection_cancel.is_cancelled() || self.cancel_token.is_cancelled() {
+                    return Err(PlayerJoinReservationError::Cancelled);
+                }
+
+                let existing = {
+                    let mut admissions = self.player_admissions.lock();
+                    match admissions.entry(uuid) {
+                        Entry::Occupied(_) => None,
+                        Entry::Vacant(entry) => {
+                            if let Some(existing) = self.online_players.get_by_uuid(&uuid) {
+                                Some(existing)
+                            } else {
+                                entry.insert(PlayerAdmissionState::Joining);
+                                return Ok(PlayerJoinReservation {
+                                    server: Arc::clone(self),
+                                    uuid,
+                                    queued: false,
+                                });
+                            }
+                        }
+                    }
+                };
+
+                if let Some(existing) = existing
+                    && !eviction_target
+                        .as_ref()
+                        .is_some_and(|target| Arc::ptr_eq(target, &existing))
+                {
+                    existing.disconnect("You logged in from another location");
+                    eviction_target = Some(existing);
+                }
+
+                tokio::select! {
+                    () = connection_cancel.cancelled() => {
+                        return Err(PlayerJoinReservationError::Cancelled);
+                    }
+                    () = self.cancel_token.cancelled() => {
+                        return Err(PlayerJoinReservationError::Cancelled);
+                    }
+                    () = sleep(DUPLICATE_LOGIN_RETRY_INTERVAL) => {}
+                }
+            }
+        };
+
+        match timeout(DUPLICATE_LOGIN_TIMEOUT, wait_for_reservation).await {
+            Ok(result) => result,
+            Err(_) => Err(PlayerJoinReservationError::TimedOut),
+        }
     }
 
     async fn prepare_player_join(&self, player: &Player) -> Result<DomainPlayerState, String> {
@@ -194,10 +318,7 @@ impl Server {
     pub(super) fn reserve_player_join(&self, player: &Player) -> bool {
         let uuid = player.gameprofile.id;
         let mut admissions = self.player_admissions.lock();
-        if admissions.contains_key(&uuid) {
-            return false;
-        }
-        if self.online_players.get_by_uuid(&uuid).is_some() {
+        if admissions.contains_key(&uuid) || self.online_players.get_by_uuid(&uuid).is_some() {
             return false;
         }
         admissions
@@ -553,3 +674,6 @@ impl Server {
         }
     }
 }
+
+#[cfg(test)]
+mod connection_lifecycle_tests;

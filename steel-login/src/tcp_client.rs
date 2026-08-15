@@ -9,14 +9,18 @@ use std::{
     io::Cursor,
     net::SocketAddr,
     sync::Arc,
+    time::Duration,
 };
 
 use crossbeam::atomic::AtomicCell;
 use steel_core::player::{
     ClientInformation, PlayerConnection,
-    connection::{JavaNetworkWriter, OutboundPacket},
+    connection::{
+        JAVA_DISCONNECT_WRITE_TIMEOUT, JAVA_PACKET_READ_TIMEOUT, JAVA_PACKET_WRITE_TIMEOUT,
+        JavaNetworkWriter, OutboundPacket,
+    },
 };
-use steel_core::server::Server;
+use steel_core::server::{PlayerJoinReservation, Server};
 use steel_protocol::{
     packet_reader::TCPNetworkDecoder,
     packet_traits::{ClientPacket, CompressionInfo, EncodedPacket, ServerPacket},
@@ -49,11 +53,15 @@ use tokio::{
         broadcast::{self, Sender, error::RecvError},
         mpsc::{self, UnboundedReceiver, UnboundedSender, error::TryRecvError},
     },
+    time::{Instant, sleep_until, timeout, timeout_at},
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
 
 use crate::pre_play_state::{PacketSequenceError, PrePlayPacket, PrePlayState};
+
+/// Maximum wall-clock time before entering play, matching 600 vanilla ticks at 20 TPS.
+const PRE_PLAY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Represents updates to the connection state.
 #[derive(Clone)]
@@ -161,6 +169,7 @@ pub struct JavaTcpClient {
     pub connection_updated: Arc<Notify>,
 
     pub(crate) pre_play_state: SyncMutex<PrePlayState>,
+    pub(crate) player_join_reservation: SyncMutex<Option<PlayerJoinReservation>>,
     task_tracker: TaskTracker,
 }
 
@@ -202,6 +211,7 @@ impl JavaTcpClient {
             connection_updates,
             connection_updated: Arc::new(Notify::new()),
             pre_play_state: SyncMutex::new(PrePlayState::new()),
+            player_join_reservation: SyncMutex::new(None),
             task_tracker,
         };
 
@@ -211,6 +221,7 @@ impl JavaTcpClient {
     /// Closes the connection.
     pub fn close(&self) {
         self.cancel_token.cancel();
+        drop(self.player_join_reservation.lock().take());
     }
 
     /// Sends a packet immediately, without queuing.
@@ -218,6 +229,9 @@ impl JavaTcpClient {
     /// # Panics
     /// This function will panic if the packet cannot be encoded. Should never happen.
     pub async fn send_bare_packet_now<P: ClientPacket>(&self, packet: P) {
+        if self.cancel_token.is_cancelled() {
+            return;
+        }
         let compression = self.compression.load();
         let protocol = self.protocol.load();
         let packet = EncodedPacket::from_bare(packet, compression, protocol)
@@ -233,6 +247,9 @@ impl JavaTcpClient {
 
     /// Sends an already encoded packet immediately, without queuing.
     pub async fn send_packet_now(&self, packet: &EncodedPacket) {
+        if self.cancel_token.is_cancelled() {
+            return;
+        }
         if let Err(err) = Self::write_network_packet(&self.network_writer, packet).await
             && !self.cancel_token.is_cancelled()
         {
@@ -241,19 +258,74 @@ impl JavaTcpClient {
         }
     }
 
+    async fn write_network_packet_with_timeout(
+        network_writer: &JavaNetworkWriter,
+        packet: &EncodedPacket,
+        deadline: Duration,
+    ) -> Result<(), PacketError> {
+        let write = async {
+            let mut network_writer = network_writer.lock().await;
+            let Some(network_writer) = network_writer.as_mut() else {
+                return Err(PacketError::ConnectionClosed);
+            };
+            network_writer.write_packet(packet).await
+        };
+
+        match timeout(deadline, write).await {
+            Ok(result) => result,
+            Err(_) => Err(PacketError::Other(format!(
+                "timed out writing Java packet after {deadline:?}"
+            ))),
+        }
+    }
+
     async fn write_network_packet(
         network_writer: &JavaNetworkWriter,
         packet: &EncodedPacket,
     ) -> Result<(), PacketError> {
-        let mut network_writer = network_writer.lock().await;
-        let Some(network_writer) = network_writer.as_mut() else {
-            return Err(PacketError::ConnectionClosed);
-        };
-        network_writer.write_packet(packet).await
+        Self::write_network_packet_with_timeout(network_writer, packet, JAVA_PACKET_WRITE_TIMEOUT)
+            .await
     }
 
-    async fn release_network_writer(network_writer: &JavaNetworkWriter) {
-        network_writer.lock().await.take();
+    async fn write_disconnect_packet(
+        network_writer: &JavaNetworkWriter,
+        packet: &EncodedPacket,
+        id: u64,
+    ) {
+        if let Err(err) = Self::write_network_packet_with_timeout(
+            network_writer,
+            packet,
+            JAVA_DISCONNECT_WRITE_TIMEOUT,
+        )
+        .await
+        {
+            log::debug!("Best-effort disconnect write for client {id} did not complete: {err}");
+        }
+    }
+
+    async fn release_network_writer(network_writer: &JavaNetworkWriter, id: u64) {
+        match timeout(JAVA_DISCONNECT_WRITE_TIMEOUT, network_writer.lock()).await {
+            Ok(mut network_writer) => {
+                network_writer.take();
+            }
+            Err(_) => log::debug!("Timed out releasing network writer for client {id}"),
+        }
+    }
+
+    async fn send_bare_disconnect_now<P: ClientPacket>(&self, packet: P) {
+        let compression = self.compression.load();
+        let protocol = self.protocol.load();
+        let packet = match EncodedPacket::from_bare(packet, compression, protocol) {
+            Ok(packet) => packet,
+            Err(err) => {
+                log::warn!(
+                    "Failed to encode disconnect packet for client {}: {err}",
+                    self.id
+                );
+                return;
+            }
+        };
+        Self::write_disconnect_packet(&self.network_writer, &packet, self.id).await;
     }
 
     /// Queues an already encoded packet to be sent.
@@ -280,6 +352,7 @@ impl JavaTcpClient {
         let id = self.id;
         let mut connection_updates_recv = self.connection_updates.subscribe();
         let connection_updated = self.connection_updated.clone();
+        let self_clone = Arc::clone(self);
 
         self.task_tracker.spawn(async move {
             let mut connection = None;
@@ -287,6 +360,7 @@ impl JavaTcpClient {
                 select! {
                     biased;
                     () = cancel_token.cancelled() => {
+                        self_clone.close();
                         Self::write_queued_disconnect(&network_writer, &mut sender_recv, id).await;
                         break;
                     }
@@ -298,10 +372,8 @@ impl JavaTcpClient {
                             };
 
                             if close_after_write {
-                                if let Err(err) = Self::write_network_packet(&network_writer, &packet).await {
-                                    log::warn!("Failed to send disconnect packet to client {id}: {err}");
-                                }
-                                cancel_token.cancel();
+                                self_clone.close();
+                                Self::write_disconnect_packet(&network_writer, &packet, id).await;
                                 break;
                             }
 
@@ -315,12 +387,12 @@ impl JavaTcpClient {
                                 result = write_result => {
                                     if let Err(err) = result {
                                         log::warn!("Failed to send packet to client {id}: {err}");
-                                        cancel_token.cancel();
+                                        self_clone.close();
                                     }
                                 }
                             }
                         } else {
-                            cancel_token.cancel();
+                            self_clone.close();
                         }
                     }
                     connection_update = connection_updates_recv.recv() => {
@@ -330,7 +402,7 @@ impl JavaTcpClient {
                                     ConnectionUpdate::EnableEncryption(key) => {
                                         let mut writer = network_writer.lock().await;
                                         let Some(writer) = writer.as_mut() else {
-                                            cancel_token.cancel();
+                                            self_clone.close();
                                             continue;
                                         };
                                         writer.set_encryption(&key);
@@ -347,7 +419,7 @@ impl JavaTcpClient {
                                 if err != RecvError::Closed {
                                     log::warn!("Internal connection_updates_recv channel closed for client {id}: {err}");
                                 }
-                                cancel_token.cancel();
+                                self_clone.close();
                             }
                         }
                     }
@@ -358,6 +430,7 @@ impl JavaTcpClient {
             drop(connection_updates_recv);
             drop(connection_updated);
 
+            drop(self_clone);
             if let Some(connection) = connection {
                 drop(network_writer);
                 match &*connection {
@@ -365,7 +438,7 @@ impl JavaTcpClient {
                     PlayerConnection::Other(_) => unreachable!("Expected Java connection"),
                 }
             } else {
-                Self::release_network_writer(&network_writer).await;
+                Self::release_network_writer(&network_writer, id).await;
                 drop(network_writer);
             }
         });
@@ -388,9 +461,7 @@ impl JavaTcpClient {
         let Some(packet) = disconnect_packet else {
             return;
         };
-        if let Err(err) = Self::write_network_packet(network_writer, &packet).await {
-            log::warn!("Failed to send disconnect packet to client {id} during close: {err}");
-        }
+        Self::write_disconnect_packet(network_writer, &packet, id).await;
     }
 
     /// Starts a task that will receive packets from the client.
@@ -406,17 +477,35 @@ impl JavaTcpClient {
         let self_clone = self.clone();
 
         self.task_tracker.spawn(async move {
+            let pre_play_deadline = Instant::now() + PRE_PLAY_TIMEOUT;
             let mut connection = None;
             loop {
                 select! {
+                    biased;
                     () = cancel_token.cancelled() => {
+                        self_clone.close();
                         break;
                     }
-                    packet = reader.get_raw_packet() => {
+                    () = sleep_until(pre_play_deadline) => {
+                        self_clone.kick("Took too long to log in".into()).await;
+                        break;
+                    }
+                    packet = timeout(JAVA_PACKET_READ_TIMEOUT, reader.get_raw_packet()) => {
                         match packet {
-                            Ok(packet) => {
-                                match self_clone.process_packet(packet).await {
-                                    Ok(action) => {
+                            Ok(Ok(packet)) => {
+                                let processed = select! {
+                                    biased;
+                                    () = cancel_token.cancelled() => {
+                                        self_clone.close();
+                                        break;
+                                    }
+                                    result = timeout_at(
+                                        pre_play_deadline,
+                                        self_clone.process_packet(packet),
+                                    ) => result,
+                                };
+                                match processed {
+                                    Ok(Ok(action)) => {
                                         if let Some(key) = action.reader_encryption {
                                             reader.set_encryption(&key);
                                         }
@@ -428,16 +517,24 @@ impl JavaTcpClient {
                                             break;
                                         }
                                     }
-                                    Err(err) => {
+                                    Ok(Err(err)) => {
                                         log::warn!(
                                             "Failed to get packet from client {id}: {err}",
                                         );
                                     }
+                                    Err(_) => {
+                                        self_clone.kick("Took too long to log in".into()).await;
+                                        break;
+                                    }
                                 }
                             }
-                            Err(err) => {
+                            Ok(Err(err)) => {
                                 log::info!("Failed to get raw packet from client {id}: {err}");
-                                cancel_token.cancel();
+                                self_clone.close();
+                            }
+                            Err(_) => {
+                                log::info!("Client {id} exceeded the packet read deadline");
+                                self_clone.close();
                             }
                         }
                     }
@@ -452,7 +549,7 @@ impl JavaTcpClient {
                                 if err != RecvError::Closed {
                                     log::info!("Internal connection_updates_recv channel closed for client {id}: {err}");
                                 }
-                                cancel_token.cancel();
+                                self_clone.close();
                             }
                         }
                     }
@@ -640,11 +737,11 @@ impl JavaTcpClient {
         match self.protocol.load() {
             ConnectionProtocol::Login => {
                 let packet = CLoginDisconnect::new(&reason, self);
-                self.send_bare_packet_now(packet).await;
+                self.send_bare_disconnect_now(packet).await;
             }
             ConnectionProtocol::Play | ConnectionProtocol::Config => {
                 let packet = CDisconnect::new(&reason, self);
-                self.send_bare_packet_now(packet).await;
+                self.send_bare_disconnect_now(packet).await;
             }
             ConnectionProtocol::Handshake | ConnectionProtocol::Status => (),
         }

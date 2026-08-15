@@ -8,6 +8,8 @@ mod java;
 pub use java::{BundleBuilder, JavaConnection, JavaNetworkWriter, OutboundPacket};
 pub(crate) use java::{ScheduledPacketExecution, ScheduledPlayPacket};
 
+use std::time::Duration;
+
 use enum_dispatch::enum_dispatch;
 use steel_protocol::packet_traits::{ClientPacket, CompressionInfo, EncodedPacket};
 use steel_protocol::packets::common::{
@@ -15,6 +17,13 @@ use steel_protocol::packets::common::{
 };
 use steel_protocol::utils::ConnectionProtocol;
 use text_components::TextComponent;
+
+/// Maximum time a Java connection may remain without receiving a packet.
+pub const JAVA_PACKET_READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// Maximum time a Java packet write may remain blocked.
+pub const JAVA_PACKET_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Maximum best-effort flush time for a final Java disconnect packet.
+pub const JAVA_DISCONNECT_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
 use crate::player::Player;
 

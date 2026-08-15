@@ -99,6 +99,15 @@ impl JavaTcpClient {
             Ok(gameprofile) => gameprofile,
             Err(error) => return self.reject_unexpected_packet(error).await,
         };
+        let reservation = { self.player_join_reservation.lock().take() };
+        let Some(reservation) = reservation else {
+            log::error!(
+                "Client {} reached play without a player admission reservation",
+                self.id
+            );
+            self.close();
+            return ConnectionAction::none();
+        };
         self.protocol.store(ConnectionProtocol::Play);
 
         let client_info = self.client_information.lock().await.clone();
@@ -142,7 +151,7 @@ impl JavaTcpClient {
             () = self.connection_updated.notified() => {}
             () = self.cancel_token.cancelled() => return ConnectionAction::none(),
         }
-        self.server.queue_player_join(player);
+        reservation.queue_player_join(player);
 
         ConnectionAction::upgrade(connection)
     }

@@ -385,6 +385,7 @@ mod player_admission;
 mod player_lifecycle;
 
 use player_admission::{PlayerAdmissionState, PlayerDisconnectQueue, PlayerJoinQueue};
+pub use player_admission::{PlayerJoinReservation, PlayerJoinReservationError};
 
 mod world_changes;
 

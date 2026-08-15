@@ -3,7 +3,7 @@
 use rsa::Pkcs1v15Encrypt;
 use sha1::Sha1;
 use sha2::Digest;
-use steel_core::player::GameProfile;
+use steel_core::{player::GameProfile, server::PlayerJoinReservationError};
 use steel_protocol::{
     packets::login::{CHello, CLoginCompression, CLoginFinished, SHello, SKey},
     utils::ConnectionProtocol,
@@ -17,6 +17,44 @@ use crate::{
 };
 
 impl JavaTcpClient {
+    async fn reserve_player_join(&self, profile: &GameProfile) -> bool {
+        match self
+            .server
+            .reserve_replacement_player_join(profile.id, &self.cancel_token)
+            .await
+        {
+            Ok(reservation) => {
+                if self.cancel_token.is_cancelled() {
+                    return false;
+                }
+
+                let mut current = self.player_join_reservation.lock();
+                if current.is_some() {
+                    log::error!(
+                        "Client {} attempted to reserve player admission twice",
+                        self.id
+                    );
+                    drop(current);
+                    self.close();
+                    return false;
+                }
+                if self.cancel_token.is_cancelled() {
+                    return false;
+                }
+                *current = Some(reservation);
+                true
+            }
+            Err(PlayerJoinReservationError::Cancelled) => {
+                self.close();
+                false
+            }
+            Err(PlayerJoinReservationError::TimedOut) => {
+                self.kick("Took too long to log in".into()).await;
+                false
+            }
+        }
+    }
+
     /// Handles the hello packet during the login state.
     pub(crate) async fn handle_hello(&self, packet: SHello) -> ConnectionAction {
         // The hello UUID is client supplied; only authentication or offline derivation is trusted.
@@ -51,6 +89,9 @@ impl JavaTcpClient {
             properties: vec![],
             profile_actions: None,
         };
+        if !self.reserve_player_join(&profile).await {
+            return ConnectionAction::none();
+        }
         let action = self.send_login_finished(&profile).await;
         let sequence_result = self.pre_play_state.lock().complete_login(profile);
         if let Err(error) = sequence_result {
@@ -60,6 +101,10 @@ impl JavaTcpClient {
     }
 
     /// Handles the key packet during the login state, used for encryption.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "authentication, encryption negotiation, and profile reservation are one login transaction"
+    )]
     pub(crate) async fn handle_key(&self, packet: SKey) -> ConnectionAction {
         let sequence_result = self.pre_play_state.lock().begin_authentication();
         let requested_username = match sequence_result {
@@ -160,7 +205,9 @@ impl JavaTcpClient {
             }
         };
 
-        //TODO: Check for duplicate player UUID or name
+        if !self.reserve_player_join(&profile).await {
+            return ConnectionAction::none();
+        }
 
         let action = self
             .send_login_finished(&profile)
