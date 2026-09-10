@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use steel_registry::{REGISTRY, RegistryExt, ticket_type::TicketTypeRef, vanilla_ticket_types};
+use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
 use steel_utils::{ChunkPos, Identifier};
 use thiserror::Error;
 
@@ -24,6 +25,13 @@ pub(crate) struct PersistentChunkTickets {
     tickets: Vec<PersistentChunkTicket>,
 }
 
+// Decode each entry only after the complete TOML document has been parsed.
+#[derive(Default, Deserialize)]
+struct RawPersistentChunkTickets {
+    #[serde(default)]
+    tickets: Vec<toml::Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PersistentChunkTicket {
     #[serde(rename = "type")]
@@ -35,7 +43,7 @@ struct PersistentChunkTicket {
     ticks_left: i64,
 }
 
-/// Invalid persisted chunk ticket data that prevents restoring the ticket storage.
+/// Invalid data for an individual persisted chunk ticket.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum ChunkTicketStorageLoadError {
     #[error("unknown chunk ticket type `{0}`")]
@@ -154,15 +162,43 @@ impl ChunkTicketStorage {
         Self::default()
     }
 
-    /// Restores registered ticket types from saved data.
-    pub(crate) fn from_persistent(
-        persistent: PersistentChunkTickets,
-    ) -> Result<Self, ChunkTicketStorageLoadError> {
+    /// Loads usable chunk tickets, logging rejected entries and file errors.
+    pub(crate) async fn load(saved_data: &SavedDataManager, world: &Identifier) -> Self {
+        let persistent = match saved_data
+            .load_or_default::<RawPersistentChunkTickets>(saved_data_names::CHUNK_TICKETS)
+            .await
+        {
+            Ok(persistent) => persistent,
+            Err(error) => {
+                log::warn!(
+                    "Failed to load chunk_tickets.toml for world {world}: {error}; \
+                     starting with empty ticket storage"
+                );
+                return Self::new();
+            }
+        };
+        Self::from_persistent(persistent, world)
+    }
+
+    fn from_persistent(persistent: RawPersistentChunkTickets, world: &Identifier) -> Self {
         let mut storage = Self::new();
-        for persistent_ticket in persistent.tickets {
-            storage.add_loaded_persistent_ticket(persistent_ticket)?;
+        for (index, value) in persistent.tickets.into_iter().enumerate() {
+            let ticket = match value.try_into::<PersistentChunkTicket>() {
+                Ok(ticket) => ticket,
+                Err(error) => {
+                    log::warn!(
+                        "Skipping chunk_tickets.toml tickets[{index}] for world {world}: {error}"
+                    );
+                    continue;
+                }
+            };
+            if let Err(error) = storage.add_loaded_persistent_ticket(ticket) {
+                log::warn!(
+                    "Skipping chunk_tickets.toml tickets[{index}] for world {world}: {error}"
+                );
+            }
         }
-        Ok(storage)
+        storage
     }
 
     /// Adds one canonical ticket or refreshes an existing matching type and level.
@@ -436,235 +472,4 @@ impl ChunkTicketStorage {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::ptr;
-
-    use steel_registry::{init_vanilla_registry, steel_ticket_types};
-
-    use super::*;
-
-    fn init_registry() {
-        let _ = init_vanilla_registry();
-    }
-
-    #[test]
-    fn duplicate_add_refreshes_timeout_without_adding_multiplicity() {
-        let mut storage = ChunkTicketStorage::new();
-        let pos = ChunkPos::new(2, -3);
-        let ticket = portal_ticket();
-
-        let first = storage.add_ticket(pos, ticket);
-        let stale_expirations = storage.timed_ticket_expirations();
-        let _ = storage.tick_timed_tickets(&stale_expirations);
-        let duplicate = storage.add_ticket(pos, ticket);
-
-        assert_eq!(first.load_positions, vec![pos]);
-        assert_eq!(first.simulation_positions, vec![pos]);
-        assert_eq!(duplicate, SourceProjectionChanges::default());
-        assert_eq!(storage.ticket_count(), 1);
-        assert_eq!(storage.timed_ticket_expirations().len(), 1);
-
-        let _ = storage.tick_timed_tickets(&stale_expirations);
-        assert_eq!(
-            storage.tickets[&pos][0].ticket.ticks_left(),
-            vanilla_ticket_types::PORTAL.timeout()
-        );
-
-        let removal = storage.remove_ticket(pos, ticket);
-        assert_eq!(removal.load_positions, vec![pos]);
-        assert_eq!(removal.simulation_positions, vec![pos]);
-        assert_eq!(storage.ticket_count(), 0);
-    }
-
-    #[test]
-    fn type_flags_control_projections_persistence_and_expiration() {
-        init_registry();
-        let mut storage = ChunkTicketStorage::new();
-        let load_pos = ChunkPos::new(0, 0);
-        let simulation_pos = ChunkPos::new(1, 0);
-        let unknown_pos = ChunkPos::new(2, 0);
-        let level = ChunkTicketLevel::BLOCK_TICKING_CHUNK;
-
-        let loading = ChunkTicket::new(&vanilla_ticket_types::PLAYER_LOADING, level);
-        let simulation = ChunkTicket::new(&vanilla_ticket_types::PLAYER_SIMULATION, level);
-        let forced = ChunkTicket::new(&vanilla_ticket_types::FORCED, level);
-        let unknown = ChunkTicket::new(&vanilla_ticket_types::UNKNOWN, level);
-
-        assert_eq!(
-            storage.add_ticket(load_pos, loading).simulation_positions,
-            Vec::new()
-        );
-        assert_eq!(storage.load_source_level(load_pos), Some(level));
-        assert_eq!(storage.simulation_source_level(load_pos), None);
-
-        assert_eq!(
-            storage
-                .add_ticket(simulation_pos, simulation)
-                .load_positions,
-            Vec::new()
-        );
-        assert_eq!(storage.load_source_level(simulation_pos), None);
-        assert_eq!(storage.simulation_source_level(simulation_pos), Some(level));
-
-        let _ = storage.add_ticket(load_pos, forced);
-        let _ = storage.add_ticket(unknown_pos, unknown);
-        assert_eq!(storage.to_persistent().tickets.len(), 1);
-
-        let expirations = storage.timed_ticket_expirations();
-        let unknown_expiration = expirations
-            .iter()
-            .find(|expiration| expiration.pos() == unknown_pos)
-            .copied()
-            .expect("unknown ticket should be timed");
-        assert!(unknown_expiration.can_expire_if_unloaded());
-
-        let portal_pos = ChunkPos::new(3, 0);
-        let _ = storage.add_or_refresh_portal_ticket(portal_pos);
-        let portal_expiration = storage
-            .timed_ticket_expirations()
-            .into_iter()
-            .find(|expiration| expiration.pos() == portal_pos)
-            .expect("portal ticket should be timed");
-        assert!(!portal_expiration.can_expire_if_unloaded());
-
-        let pearl_pos = ChunkPos::new(4, 0);
-        let _ = storage.add_or_refresh_ender_pearl_ticket(pearl_pos);
-        let pearl_expiration = storage
-            .timed_ticket_expirations()
-            .into_iter()
-            .find(|expiration| expiration.pos() == pearl_pos)
-            .expect("ender pearl ticket should be timed");
-        assert!(!pearl_expiration.can_expire_if_unloaded());
-    }
-
-    #[test]
-    fn persistence_resolves_registered_type_and_rejects_invalid_values() {
-        init_registry();
-        let pos = ChunkPos::new(-8, 12);
-        let level = ChunkTicketLevel::BLOCK_TICKING_CHUNK;
-        let mut storage = ChunkTicketStorage::new();
-        let portal = ChunkTicket::from_saved(&vanilla_ticket_types::PORTAL, level, 123);
-        let forced = ChunkTicket::new(&vanilla_ticket_types::FORCED, level);
-        let internal = ChunkTicket::new(&steel_ticket_types::CHUNK_REQUEST, level);
-        let _ = storage.add_ticket(pos, portal);
-        let _ = storage.add_ticket(pos, forced);
-        let _ = storage.add_ticket(pos, internal);
-
-        let persistent = storage.to_persistent();
-        assert_eq!(persistent.tickets.len(), 2);
-        let restored = ChunkTicketStorage::from_persistent(persistent)
-            .expect("registered persistent ticket types should restore");
-        assert_eq!(restored.ticket_count(), 2);
-        let restored_tickets = &restored.tickets[&pos];
-        let forced_ticks_left = restored_tickets
-            .iter()
-            .find(|stored| {
-                ptr::eq(
-                    stored.ticket.ticket_type(),
-                    &raw const vanilla_ticket_types::FORCED,
-                )
-            })
-            .map(|stored| stored.ticket.ticks_left());
-        let portal_ticks_left = restored_tickets
-            .iter()
-            .find(|stored| {
-                ptr::eq(
-                    stored.ticket.ticket_type(),
-                    &raw const vanilla_ticket_types::PORTAL,
-                )
-            })
-            .map(|stored| stored.ticket.ticks_left());
-        assert_eq!(forced_ticks_left, Some(0));
-        assert_eq!(portal_ticks_left, Some(123));
-
-        let unknown = PersistentChunkTickets {
-            tickets: vec![PersistentChunkTicket {
-                ticket_type: Identifier::new_static("test", "missing"),
-                chunk_x: 0,
-                chunk_z: 0,
-                level: level.raw(),
-                ticks_left: 0,
-            }],
-        };
-        let error = ChunkTicketStorage::from_persistent(unknown)
-            .expect_err("unknown ticket type should be rejected");
-        assert_eq!(
-            error,
-            ChunkTicketStorageLoadError::UnknownTicketType(Identifier::new_static(
-                "test", "missing"
-            ))
-        );
-
-        let invalid_level = ChunkTicketLevel::MAX.raw() + 1;
-        let invalid = PersistentChunkTickets {
-            tickets: vec![PersistentChunkTicket {
-                ticket_type: Identifier::vanilla_static("forced"),
-                chunk_x: 0,
-                chunk_z: 0,
-                level: invalid_level,
-                ticks_left: 0,
-            }],
-        };
-        let error = ChunkTicketStorage::from_persistent(invalid)
-            .expect_err("out-of-range ticket level should be rejected");
-        assert_eq!(
-            error,
-            ChunkTicketStorageLoadError::InvalidTicketLevel {
-                ticket_type: Identifier::vanilla_static("forced"),
-                level: invalid_level,
-            }
-        );
-    }
-
-    #[test]
-    fn persistence_defaults_ticks_and_duplicate_activation_refreshes_timeout() {
-        init_registry();
-        let pos = ChunkPos::new(2, 3);
-        let level = ChunkTicketLevel::FULL_CHUNK;
-        let encoded = format!(
-            "tickets = [{{ type = \"minecraft:portal\", chunk_x = 2, chunk_z = 3, level = {} }}]",
-            level.raw()
-        );
-        let mut persistent: PersistentChunkTickets =
-            toml::from_str(&encoded).expect("ticket data without ticks_left should decode");
-        assert_eq!(persistent.tickets[0].ticks_left, 0);
-
-        persistent.tickets.push(PersistentChunkTicket {
-            ticket_type: Identifier::vanilla_static("portal"),
-            chunk_x: pos.0.x,
-            chunk_z: pos.0.y,
-            level: level.raw(),
-            ticks_left: 20,
-        });
-        let restored = ChunkTicketStorage::from_persistent(persistent)
-            .expect("duplicate registered tickets should restore");
-
-        assert_eq!(restored.ticket_count(), 1);
-        assert_eq!(
-            restored.tickets[&pos][0].ticket.ticks_left(),
-            vanilla_ticket_types::PORTAL.timeout()
-        );
-    }
-
-    #[test]
-    fn timed_decrement_wraps_like_java_long() {
-        init_registry();
-        let pos = ChunkPos::new(4, 5);
-        let persistent = PersistentChunkTickets {
-            tickets: vec![PersistentChunkTicket {
-                ticket_type: Identifier::vanilla_static("portal"),
-                chunk_x: pos.0.x,
-                chunk_z: pos.0.y,
-                level: ChunkTicketLevel::FULL_CHUNK.raw(),
-                ticks_left: i64::MIN,
-            }],
-        };
-        let mut storage =
-            ChunkTicketStorage::from_persistent(persistent).expect("portal ticket should restore");
-
-        let expirations = storage.timed_ticket_expirations();
-        let _ = storage.tick_timed_tickets(&expirations);
-
-        assert_eq!(storage.tickets[&pos][0].ticket.ticks_left(), i64::MAX);
-    }
-}
+mod tests;
