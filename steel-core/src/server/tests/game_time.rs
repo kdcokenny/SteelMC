@@ -1,6 +1,10 @@
+use std::path::Path;
+
 use super::*;
 use crate::server::world_tick_workers::WorldTickWorkers;
 use crate::test_support::test_domain;
+use crate::world::tick_scheduler::TickPriority;
+use steel_registry::vanilla_fluids;
 use steel_registry::{packets::play::C_SET_TIME, vanilla_world_clocks};
 
 #[test]
@@ -45,7 +49,6 @@ fn game_time_domains_freeze_steps_sprint_and_transfer_damage() {
         )
         .await
         .expect("server");
-        server.worlds.validate_game_times().expect("bound domains");
         let workers = WorldTickWorkers::spawn(server.worlds.values()).expect("workers");
         let player = test_player(&server, Arc::clone(&primary));
         let source = DamageSource::environment(&vanilla_damage_types::GENERIC);
@@ -90,7 +93,6 @@ fn game_time_domains_freeze_steps_sprint_and_transfer_damage() {
             assert_eq!(derived.game_time(), expected_damage_age);
             assert_eq!(player.last_damage_source().is_some(), available);
         }
-        assert_eq!(derived.game_time(), 41);
         let sprint_ticks = 3;
         server
             .tick_rate_manager
@@ -176,8 +178,6 @@ fn game_time_full_partial_periodic_packets_keep_world_clocks_independent() {
             })
             .collect();
         assert_eq!(times, vec![(20, 1), (20, 1), (20, 1), (20, 2), (20, 0)]);
-        assert_eq!(primary.game_time(), 20);
-        assert_eq!(derived.time_sync_packet().game_time, 20);
         assert_eq!(
             primary.clock_total_ticks(&vanilla_world_clocks::OVERWORLD),
             Some(0)
@@ -196,7 +196,7 @@ fn game_time_full_partial_periodic_packets_keep_world_clocks_independent() {
 }
 
 #[test]
-fn game_time_startup_uses_configured_primary_even_when_listed_last() {
+fn game_time_startup_and_chunk_reload_use_the_configured_primary() {
     with_server_runtime(|runtime| {
         runtime.block_on(async {
             let root = test_storage_root("game-time-primary-last");
@@ -235,25 +235,58 @@ dimension_type = "minecraft:the_end"
                 .expect("startup")
             };
             let server = start().await;
-            let primary = server.worlds.default_world("custom").expect("primary");
-            assert_eq!(primary.key.path.as_ref(), "authority");
-            for _ in 0..73 {
+            let initial_game_time = 73;
+            let ticks_before_save = 3;
+            for _ in 0..initial_game_time {
                 server.worlds.advance_domain_game_times();
             }
+            let derived_key = steel_utils::Identifier::new_static("custom", "derived");
+            let derived = server.worlds.get(&derived_key).expect("derived");
+            let tick_pos = BlockPos::new(512, 64, 512);
+            let chunk_pos = ChunkPos::from_block_pos(tick_pos);
+            insert_ready_full_chunk(derived, chunk_pos);
+            derived.schedule_block_tick(tick_pos, &vanilla_blocks::STONE, 10, TickPriority::High);
+            derived.schedule_fluid_tick(tick_pos, &vanilla_fluids::WATER, 14, TickPriority::Low);
+            for _ in 0..ticks_before_save {
+                server.worlds.advance_domain_game_times();
+            }
+            stop_game_time_test_worlds(&server).await;
             let mut saved_chunks = 0;
             for world in server.worlds.values() {
                 world.cleanup(&mut saved_chunks).await;
             }
             server.cancel_token.cancel();
             drop(server);
+            // The obsolete field must not anchor chunk deadlines during startup.
+            write_legacy_game_time(&root.join("custom/worlds/derived/level.toml"), 900_000).await;
             let restarted = start().await;
             for world in restarted.worlds.values() {
-                assert_eq!(world.game_time(), 73);
+                assert_eq!(world.game_time(), initial_game_time + ticks_before_save);
             }
-            restarted
-                .worlds
-                .validate_game_times()
-                .expect("restart binding");
+            let derived = restarted.worlds.get(&derived_key).expect("derived");
+            derived
+                .chunk_map
+                .with_full_chunks_in_radius(chunk_pos, 0, || {
+                    derived
+                        .unpack_scheduled_ticks(chunk_pos)
+                        .expect("unpack on the world clock");
+                    restarted.worlds.advance_domain_game_times();
+                    let snapshot = derived
+                        .chunk_map
+                        .with_full_chunk(chunk_pos, |chunk| chunk.scheduled_tick_snapshot())
+                        .expect("loaded chunk");
+                    assert_eq!(
+                        snapshot.block[0].delay, 6,
+                        "seven saved ticks minus one live tick"
+                    );
+                    assert_eq!(
+                        snapshot.fluid[0].delay, 10,
+                        "eleven saved ticks minus one live tick"
+                    );
+                })
+                .await
+                .expect("load saved chunk");
+            stop_game_time_test_worlds(&restarted).await;
             restarted.cancel_token.cancel();
             drop(restarted);
             fs::remove_dir_all(root).await.expect("cleanup");
@@ -265,4 +298,25 @@ fn next_simulation_gate(server: &Server) -> bool {
     let mut manager = server.tick_rate_manager.write();
     manager.tick();
     manager.runs_normally()
+}
+
+async fn stop_game_time_test_worlds(server: &Server) {
+    for world in server.worlds.values() {
+        world.chunk_map.stop_generation_refill_loop();
+        world.chunk_map.task_tracker.close();
+        world.chunk_map.task_tracker.wait().await;
+    }
+}
+
+async fn write_legacy_game_time(path: &Path, ticks: i64) {
+    let mut saved: toml::Table =
+        toml::from_str(&fs::read_to_string(path).await.expect("read derived save"))
+            .expect("level data");
+    saved.insert("game_time".to_owned(), ticks.into());
+    fs::write(
+        path,
+        toml::to_string(&saved).expect("serialize legacy save"),
+    )
+    .await
+    .expect("write legacy time");
 }

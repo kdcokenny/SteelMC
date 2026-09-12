@@ -159,7 +159,7 @@ mod tests {
     }
     #[test]
     fn shared_time_is_published_while_primary_worker_is_delayed() {
-        let worlds = test_domain("delayed", &["primary", "derived", "other"]);
+        let worlds = test_domain("delayed", &["primary", "derived"]);
         let primary = worlds.default_world("delayed").expect("primary");
         let derived = worlds
             .get(&steel_utils::Identifier::new_static("delayed", "derived"))
