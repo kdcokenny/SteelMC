@@ -42,6 +42,8 @@ const MIN_EFFECT_AMPLIFIER: i32 = 0;
 const MAX_EFFECT_AMPLIFIER: i32 = 255;
 const SPRINT_SPEED_MODIFIER_AMOUNT: f64 = 0.3;
 const POST_IMPULSE_GRACE_TICKS: i32 = 40;
+/// Vanilla `LivingEntity.DAMAGE_SOURCE_TIMEOUT`, measured in game ticks.
+const DAMAGE_SOURCE_TIMEOUT: i64 = 40;
 
 /// Runtime mob-effect state.
 ///
@@ -1528,7 +1530,7 @@ impl LivingEntityBase {
     /// Returns vanilla `LivingEntity.getLastDamageSource()`.
     pub fn last_damage_source(&self, game_time: i64) -> Option<DamageSource> {
         let mut state = self.state.lock();
-        if game_time.wrapping_sub(state.last_damage_stamp) > 40 {
+        if game_time.wrapping_sub(state.last_damage_stamp) > DAMAGE_SOURCE_TIMEOUT {
             state.last_damage_source = None;
         }
         state.last_damage_source.clone()

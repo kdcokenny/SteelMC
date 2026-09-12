@@ -842,6 +842,7 @@ fn priority_ordering_matches_vanilla_discriminants() {
 fn shared_game_time_reload_preserves_block_and_fluid_remaining_delay() {
     use crate::level_data::{GameTimeSource, LevelData, LevelDataManager, WorldGenerationSettings};
     use std::env::temp_dir;
+    use steel_registry::vanilla_dimension_types;
     use steel_utils::types::Difficulty;
     use tokio::{fs, runtime::Builder};
     init_vanilla_registry();
@@ -855,16 +856,23 @@ fn shared_game_time_reload_preserves_block_and_fluid_remaining_delay() {
         let derived_dir = root.join("derived");
         fs::create_dir_all(&primary_dir).await.expect("primary dir");
         fs::create_dir_all(&derived_dir).await.expect("derived dir");
+        let primary_saved_time: i64 = 200;
+        let derived_legacy_time: i64 = 900_000;
+        let remaining_delay = 7;
         let generation = || {
+            let dimension = &vanilla_dimension_types::OVERWORLD;
             WorldGenerationSettings::from_generator_config(
                 Identifier::vanilla_static("empty"),
                 &toml::Value::Table(toml::Table::new()),
-                Identifier::vanilla_static("overworld"),
-                -64,
-                384,
+                dimension.key.clone(),
+                dimension.min_y,
+                dimension.height,
             )
         };
-        for (dir, time) in [(&primary_dir, 200), (&derived_dir, 900_000)] {
+        for (dir, time) in [
+            (&primary_dir, primary_saved_time),
+            (&derived_dir, derived_legacy_time),
+        ] {
             let mut table = toml::Table::try_from(LevelData::new_with_seed(1)).expect("fixture");
             table.insert("game_time".to_owned(), time.into());
             fs::write(
@@ -895,25 +903,28 @@ fn shared_game_time_reload_preserves_block_and_fluid_remaining_delay() {
         let mut blocks = BlockTickList::new();
         let mut fluids = FluidTickList::new();
         let pos = BlockPos::new(1, 64, 1);
-        assert!(blocks.schedule(test_block(), pos, 900_007, TickPriority::Normal, 8));
+        let legacy_deadline = derived_legacy_time + remaining_delay;
+        assert!(blocks.schedule(test_block(), pos, legacy_deadline, TickPriority::Normal, 0));
         assert!(fluids.schedule(
             &vanilla_fluids::WATER,
             pos,
-            900_007,
+            legacy_deadline,
             TickPriority::Normal,
-            9
+            0
         ));
-        let mut blocks = BlockTickList::from_saved_ticks(blocks.pack(900_000));
-        let mut fluids = FluidTickList::from_saved_ticks(fluids.pack(900_000));
+        let mut blocks = BlockTickList::from_saved_ticks(blocks.pack(derived_legacy_time));
+        let mut fluids = FluidTickList::from_saved_ticks(fluids.pack(derived_legacy_time));
         let now = derived.game_time_handle().ticks();
         blocks.unpack(now);
         fluids.unpack(now);
-        assert!(blocks.drain_ready(206).is_empty());
-        assert!(fluids.drain_ready(206).is_empty());
-        assert_eq!(blocks.pack(203)[0].delay, 4);
-        assert_eq!(fluids.pack(203)[0].delay, 4);
-        assert_eq!(blocks.drain_ready(207).len(), 1);
-        assert_eq!(fluids.drain_ready(207).len(), 1);
+        let restored_deadline = primary_saved_time + remaining_delay;
+        assert!(blocks.drain_ready(restored_deadline - 1).is_empty());
+        assert!(fluids.drain_ready(restored_deadline - 1).is_empty());
+        let save_after_three_ticks = primary_saved_time + 3;
+        assert_eq!(blocks.pack(save_after_three_ticks)[0].delay, 4);
+        assert_eq!(fluids.pack(save_after_three_ticks)[0].delay, 4);
+        assert_eq!(blocks.drain_ready(restored_deadline).len(), 1);
+        assert_eq!(fluids.drain_ready(restored_deadline).len(), 1);
         fs::remove_dir_all(root).await.expect("cleanup");
     });
 }

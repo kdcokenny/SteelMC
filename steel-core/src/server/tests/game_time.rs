@@ -11,7 +11,8 @@ use steel_registry::{packets::play::C_SET_TIME, vanilla_world_clocks};
 fn game_time_domains_freeze_steps_sprint_and_transfer_damage() {
     let first = test_domain("clock_a", &["primary", "derived", "third"]);
     let second = test_domain("clock_b", &["primary"]);
-    for _ in 0..100 {
+    let other_domain_start_time = 100;
+    for _ in 0..other_domain_start_time {
         second.advance_domain_game_times();
     }
     let primary = Arc::clone(first.default_world("clock_a").expect("primary"));
@@ -51,9 +52,12 @@ fn game_time_domains_freeze_steps_sprint_and_transfer_damage() {
         player
             .living_base()
             .record_last_damage_source(&source, primary.game_time());
-        for tick in 1..=39 {
+        let mut server_iteration = 0;
+        let transfer_age = 39;
+        for _ in 0..transfer_age {
+            server_iteration += 1;
             server
-                .tick_worlds_game(&workers, tick, true)
+                .tick_worlds_game(&workers, server_iteration, true)
                 .await
                 .expect("tick");
         }
@@ -64,27 +68,36 @@ fn game_time_domains_freeze_steps_sprint_and_transfer_damage() {
             "same-domain transfer preserves history"
         );
         server.tick_rate_manager.write().set_frozen(true);
-        for tick in 40..50 {
+        let frozen_iterations = 10;
+        for _ in 0..frozen_iterations {
+            server_iteration += 1;
             let runs = next_simulation_gate(&server);
             server
-                .tick_worlds_game(&workers, tick, runs)
+                .tick_worlds_game(&workers, server_iteration, runs)
                 .await
                 .expect("frozen tick");
         }
         assert_eq!(primary.game_time(), 39);
         assert!(player.last_damage_source().is_some());
         assert!(server.tick_rate_manager.write().step_game_if_paused(2));
-        for (tick, available) in [(50, true), (51, false)] {
+        for (expected_damage_age, available) in [(40, true), (41, false)] {
+            server_iteration += 1;
             let runs = next_simulation_gate(&server);
             server
-                .tick_worlds_game(&workers, tick, runs)
+                .tick_worlds_game(&workers, server_iteration, runs)
                 .await
                 .expect("step");
+            assert_eq!(derived.game_time(), expected_damage_age);
             assert_eq!(player.last_damage_source().is_some(), available);
         }
         assert_eq!(derived.game_time(), 41);
-        server.tick_rate_manager.write().request_game_to_sprint(3);
-        for tick in 52..55 {
+        let sprint_ticks = 3;
+        server
+            .tick_rate_manager
+            .write()
+            .request_game_to_sprint(sprint_ticks);
+        for _ in 0..sprint_ticks {
+            server_iteration += 1;
             let runs = {
                 let mut manager = server.tick_rate_manager.write();
                 manager.tick();
@@ -92,7 +105,7 @@ fn game_time_domains_freeze_steps_sprint_and_transfer_damage() {
                 manager.runs_normally()
             };
             server
-                .tick_worlds_game(&workers, tick, runs)
+                .tick_worlds_game(&workers, server_iteration, runs)
                 .await
                 .expect("sprint");
             server.tick_rate_manager.write().end_tick_work();
@@ -105,7 +118,7 @@ fn game_time_domains_freeze_steps_sprint_and_transfer_damage() {
                 .server_default_world()
                 .expect("second primary")
                 .game_time(),
-            144
+            other_domain_start_time + 44
         );
         drop(workers);
         server.cancel_token.cancel();
@@ -130,14 +143,15 @@ fn game_time_full_partial_periodic_packets_keep_world_clocks_independent() {
             .await
             .expect("server");
         let (player, packets) =
-            test_player_with_packets(&server, Arc::clone(derived), "ClockTest", 771_234);
+            test_player_with_packets(&server, Arc::clone(derived), "ClockTest", next_entity_id());
         assert!(derived.add_player(Arc::clone(&player), ResetReason::InitialJoin));
         packets.lock().clear();
-        for _ in 0..20 {
+        let periodic_sync_tick = 20;
+        for _ in 0..periodic_sync_tick {
             worlds.advance_domain_game_times();
         }
         derived
-            .set_clock_total_ticks(&vanilla_world_clocks::OVERWORLD, 6000)
+            .set_clock_total_ticks(&vanilla_world_clocks::OVERWORLD, 6_000)
             .expect("clock");
         derived
             .set_clock_rate(&vanilla_world_clocks::OVERWORLD, 2.0)
@@ -146,7 +160,7 @@ fn game_time_full_partial_periodic_packets_keep_world_clocks_independent() {
             .set_clock_paused(&vanilla_world_clocks::THE_END, true)
             .expect("pause");
         derived.broadcast_time_sync();
-        derived.tick_game(20, true);
+        derived.tick_game(periodic_sync_tick, true);
         let times: Vec<_> = packets
             .lock()
             .iter()
@@ -170,7 +184,7 @@ fn game_time_full_partial_periodic_packets_keep_world_clocks_independent() {
         );
         assert_eq!(
             derived.clock_total_ticks(&vanilla_world_clocks::OVERWORLD),
-            Some(6002)
+            Some(6_002)
         );
         assert_eq!(
             derived.clock_total_ticks(&vanilla_world_clocks::THE_END),

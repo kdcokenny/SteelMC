@@ -1,13 +1,16 @@
 use super::tests::{settings, temp_level_data_dir};
 use super::*;
-use steel_registry::init_vanilla_registry;
+use steel_registry::{init_vanilla_registry, vanilla_dimension_types};
 
 async fn load(path: &Path, source: GameTimeSource) -> io::Result<LevelDataManager> {
     LevelDataManager::new(
         Some(path),
         7,
         Difficulty::Normal,
-        settings("minecraft:overworld", 384),
+        settings(
+            "minecraft:overworld",
+            vanilla_dimension_types::OVERWORLD.height,
+        ),
         source,
     )
     .await
@@ -133,7 +136,10 @@ async fn game_time_new_and_ephemeral_primaries_are_independent_and_wrap() {
         None::<&Path>,
         7,
         Difficulty::Normal,
-        settings("minecraft:overworld", 384),
+        settings(
+            "minecraft:overworld",
+            vanilla_dimension_types::OVERWORLD.height,
+        ),
         GameTimeSource::Primary,
     )
     .await

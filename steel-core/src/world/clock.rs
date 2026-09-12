@@ -4,6 +4,9 @@ use steel_registry::{REGISTRY, world_clock::WorldClockRef};
 use steel_utils::Identifier;
 use thiserror::Error;
 
+/// Game-time synchronization interval, measured in simulation ticks.
+const GAME_TIME_SYNC_INTERVAL_TICKS: i64 = 20;
+
 /// One persisted instance of a registered world clock.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -295,7 +298,7 @@ impl World {
             self.game_time()
         };
 
-        if game_time % 20 == 0 {
+        if game_time % GAME_TIME_SYNC_INTERVAL_TICKS == 0 {
             self.broadcast_to_all(CSetTime::new(game_time, Vec::new()));
         }
     }
