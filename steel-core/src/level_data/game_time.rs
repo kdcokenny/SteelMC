@@ -1,4 +1,6 @@
 //! One live simulation counter per domain; persistence belongs to its configured default world.
+//! Domains with persistent worlds require a primary that persists level data.
+//! Legacy absolute timestamps are not rebased when derived worlds adopt the primary clock.
 use std::sync::{
     Arc,
     atomic::{AtomicI64, Ordering},

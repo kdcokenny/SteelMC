@@ -79,7 +79,6 @@ use std::sync::atomic::AtomicI32;
 use std::{
     collections::BTreeSet,
     io, mem,
-    path::Path,
     sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
@@ -572,6 +571,8 @@ impl Server {
             .validate_and_resolve(&generator_registry, &storage_registry)
             .map_err(|e| format!("failed to validate worlds.toml: {e}"))?;
 
+        let mut world_storage = storage_registry.resolve_worlds(&resolved_worlds)?;
+
         let generation_pool: Arc<ThreadPool> = Arc::new({
             let mut builder = ThreadPoolBuilder::new().thread_name(|i| format!("rayon-gen-{i}"));
             if let Some(chunk_generation_threads) =
@@ -620,21 +621,12 @@ impl Server {
             &resolved_worlds.worlds,
         );
 
-        let construct_world = async |world_entry: &ResolvedWorldConfig,
-                                     game_time_source: GameTimeSource|
+        let mut construct_world = async |world_entry: &ResolvedWorldConfig,
+                                         game_time_source: GameTimeSource|
                -> Result<Arc<World>, String> {
-            let default_world_path = resolved_worlds
-                .save_path
-                .join(&world_entry.domain)
-                .join("worlds")
-                .join(&world_entry.name);
-            let storage_output = storage_registry
-                .create(
-                    &world_entry.storage,
-                    &resolved_worlds.save_path,
-                    Path::new(&default_world_path),
-                )
-                .map_err(|e| format!("failed to create storage for {}: {e}", world_entry.key))?;
+            let storage_output = world_storage
+                .remove(&world_entry.key)
+                .ok_or_else(|| format!("world {} has no resolved storage", world_entry.key))?;
             let world_seed = LevelDataManager::load_seed_or_default(
                 storage_output.level_data_path.as_deref(),
                 world_entry.seed,

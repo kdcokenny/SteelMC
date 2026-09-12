@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use super::*;
+use crate::level_data::LevelData;
 use crate::server::world_tick_workers::WorldTickWorkers;
 use crate::test_support::test_domain;
 use crate::world::tick_scheduler::TickPriority;
@@ -319,4 +320,71 @@ async fn write_legacy_game_time(path: &Path, ticks: i64) {
     )
     .await
     .expect("write legacy time");
+}
+
+#[test]
+fn game_time_rejects_ephemeral_primary_before_touching_derived_save() {
+    with_server_runtime(|runtime| {
+        runtime.block_on(async {
+            init_vanilla_registry();
+            let root = test_storage_root("game-time-storage-validation");
+            let derived_dir = root.join("custom/worlds/derived");
+            fs::create_dir_all(&derived_dir)
+                .await
+                .expect("fixture directory");
+            let path = derived_dir.join("level.toml");
+            fs::write(
+                &path,
+                toml::to_string(&LevelData::new_with_seed(7)).expect("level data"),
+            )
+            .await
+            .expect("fixture save");
+            write_legacy_game_time(&path, 2_000).await;
+            let original = fs::read(&path).await.expect("original save");
+            let config_text = format!(
+                r#"
+save_path = '{}'
+[domains.custom]
+default = true
+[[domains.custom.worlds]]
+name = "derived"
+generator = "minecraft:flat"
+storage = {{ type = "steel:disk" }}
+[[domains.custom.worlds]]
+name = "lobby"
+generator = "minecraft:flat"
+default = true
+storage = {{ type = "steel:ram" }}
+"#,
+                root.display()
+            );
+            let mut config = RuntimeConfig::clone(&test_runtime_config());
+            config.services_server = Some(UNROUTABLE_SERVICES.to_owned());
+            let cancel = CancellationToken::new();
+            let result = Server::new(
+                Arc::clone(runtime),
+                cancel.clone(),
+                config,
+                toml::from_str(&config_text).expect("world config"),
+                PermissionGroupManager::transient(PermissionGroupsConfig::default())
+                    .expect("permissions"),
+            )
+            .await;
+            cancel.cancel();
+            let Err(error) = result else {
+                panic!("persistent siblings require a durable primary clock");
+            };
+            assert!(
+                error.contains("custom:lobby must persist level data"),
+                "{error}"
+            );
+            assert!(
+                error.contains("custom:derived uses persistent storage"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&path).await.expect("unchanged save"), original);
+            assert!(!root.join("custom/worlds/lobby").exists());
+            fs::remove_dir_all(root).await.expect("cleanup");
+        });
+    });
 }
