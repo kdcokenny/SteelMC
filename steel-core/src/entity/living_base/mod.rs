@@ -1518,10 +1518,17 @@ impl LivingEntityBase {
         state.last_damage_stamp = game_time;
     }
 
+    /// Drops transient damage history when target-domain player state is restored.
+    pub(crate) fn clear_last_damage_source(&self) {
+        let mut state = self.state.lock();
+        state.last_damage_source = None;
+        state.last_damage_stamp = 0;
+    }
+
     /// Returns vanilla `LivingEntity.getLastDamageSource()`.
     pub fn last_damage_source(&self, game_time: i64) -> Option<DamageSource> {
         let mut state = self.state.lock();
-        if game_time - state.last_damage_stamp > 40 {
+        if game_time.wrapping_sub(state.last_damage_stamp) > 40 {
             state.last_damage_source = None;
         }
         state.last_damage_source.clone()

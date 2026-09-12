@@ -837,3 +837,83 @@ fn priority_ordering_matches_vanilla_discriminants() {
     assert!(TickPriority::Normal < TickPriority::ExtremelyLow);
     assert!(TickPriority::High < TickPriority::Low);
 }
+
+#[test]
+fn shared_game_time_reload_preserves_block_and_fluid_remaining_delay() {
+    use crate::level_data::{GameTimeSource, LevelData, LevelDataManager, WorldGenerationSettings};
+    use std::env::temp_dir;
+    use steel_utils::types::Difficulty;
+    use tokio::{fs, runtime::Builder};
+    init_vanilla_registry();
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let root = temp_dir().join(format!("steel-clock-scheduler-{}", uuid::Uuid::new_v4()));
+        let primary_dir = root.join("primary");
+        let derived_dir = root.join("derived");
+        fs::create_dir_all(&primary_dir).await.expect("primary dir");
+        fs::create_dir_all(&derived_dir).await.expect("derived dir");
+        let generation = || {
+            WorldGenerationSettings::from_generator_config(
+                Identifier::vanilla_static("empty"),
+                &toml::Value::Table(toml::Table::new()),
+                Identifier::vanilla_static("overworld"),
+                -64,
+                384,
+            )
+        };
+        for (dir, time) in [(&primary_dir, 200), (&derived_dir, 900_000)] {
+            let mut table = toml::Table::try_from(LevelData::new_with_seed(1)).expect("fixture");
+            table.insert("game_time".to_owned(), time.into());
+            fs::write(
+                dir.join("level.toml"),
+                toml::to_string(&table).expect("toml"),
+            )
+            .await
+            .expect("save");
+        }
+        let primary = LevelDataManager::new(
+            Some(&primary_dir),
+            1,
+            Difficulty::Normal,
+            generation(),
+            GameTimeSource::Primary,
+        )
+        .await
+        .expect("primary");
+        let derived = LevelDataManager::new(
+            Some(&derived_dir),
+            1,
+            Difficulty::Normal,
+            generation(),
+            GameTimeSource::Derived(primary.game_time_handle()),
+        )
+        .await
+        .expect("derived");
+        let mut blocks = BlockTickList::new();
+        let mut fluids = FluidTickList::new();
+        let pos = BlockPos::new(1, 64, 1);
+        assert!(blocks.schedule(test_block(), pos, 900_007, TickPriority::Normal, 8));
+        assert!(fluids.schedule(
+            &vanilla_fluids::WATER,
+            pos,
+            900_007,
+            TickPriority::Normal,
+            9
+        ));
+        let mut blocks = BlockTickList::from_saved_ticks(blocks.pack(900_000));
+        let mut fluids = FluidTickList::from_saved_ticks(fluids.pack(900_000));
+        let now = derived.game_time_handle().ticks();
+        blocks.unpack(now);
+        fluids.unpack(now);
+        assert!(blocks.drain_ready(206).is_empty());
+        assert!(fluids.drain_ready(206).is_empty());
+        assert_eq!(blocks.pack(203)[0].delay, 4);
+        assert_eq!(fluids.pack(203)[0].delay, 4);
+        assert_eq!(blocks.drain_ready(207).len(), 1);
+        assert_eq!(fluids.drain_ready(207).len(), 1);
+        fs::remove_dir_all(root).await.expect("cleanup");
+    });
+}

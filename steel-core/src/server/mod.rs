@@ -38,7 +38,7 @@ use crate::entity::{
 };
 
 use crate::chunk_saver::{ChunkStorage, PersistentEntity, registry::WorldStorageRegistry};
-use crate::level_data::{LevelDataManager, RespawnData, WorldGenerationSettings};
+use crate::level_data::{GameTimeSource, LevelDataManager, RespawnData, WorldGenerationSettings};
 use crate::permission::{
     OP_GROUP, PermissionGroupManager, PermissionGroupManagerError, PermissionGroupUpdateError,
     PermissionGroupsConfig, PermissionMetadataExpression, PermissionRuleExpression, PermissionSet,
@@ -620,7 +620,9 @@ impl Server {
             &resolved_worlds.worlds,
         );
 
-        for world_entry in &resolved_worlds.worlds {
+        let construct_world = async |world_entry: &ResolvedWorldConfig,
+                                     game_time_source: GameTimeSource|
+               -> Result<Arc<World>, String> {
             let default_world_path = resolved_worlds
                 .save_path
                 .join(&world_entry.domain)
@@ -659,6 +661,7 @@ impl Server {
                 generator_output.dimension_type,
                 world_seed,
                 WorldConfig {
+                    game_time_source,
                     storage: storage_output.storage,
                     level_data_path: storage_output
                         .level_data_path
@@ -683,8 +686,34 @@ impl Server {
                 .initialize_spawn_if_needed()
                 .await
                 .map_err(|e| format!("failed to initialize spawn for {}: {e}", world_entry.key))?;
-            worlds.insert(world_entry.key.clone(), world);
+            Ok(world)
+        };
+        for domain in &resolved_worlds.domains {
+            let primary_config = resolved_worlds
+                .worlds
+                .iter()
+                .find(|world| world.key == domain.default_world && world.domain == domain.name)
+                .ok_or_else(|| {
+                    format!(
+                        "domain {} has no configured primary {}",
+                        domain.name, domain.default_world
+                    )
+                })?;
+            let primary = construct_world(primary_config, GameTimeSource::Primary).await?;
+            let clock = Arc::clone(&primary.game_time);
+            worlds.insert(primary_config.key.clone(), primary);
+            for world_entry in resolved_worlds
+                .worlds
+                .iter()
+                .filter(|world| world.domain == domain.name && world.key != domain.default_world)
+            {
+                let world =
+                    construct_world(world_entry, GameTimeSource::Derived(Arc::clone(&clock)))
+                        .await?;
+                worlds.insert(world_entry.key.clone(), world);
+            }
         }
+        worlds.validate_game_times()?;
 
         let scoreboards = DomainScoreboards::load(&worlds)
             .await

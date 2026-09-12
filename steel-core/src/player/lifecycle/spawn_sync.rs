@@ -23,7 +23,11 @@ impl Player {
     ) where
         F: FnOnce(),
     {
-        self.reset_inner_after(new_world, ResetReason::WorldChange, true, restore_state);
+        self.reset_inner_after(new_world, ResetReason::WorldChange, true, || {
+            restore_state();
+            // Damage history is transient source-domain state, not part of the restored save.
+            self.living_base.clear_last_damage_source();
+        });
     }
 
     fn reset_inner_after<F>(
