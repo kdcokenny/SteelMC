@@ -157,6 +157,7 @@ mod tests {
         assert_eq!(first.game_time(), 2);
         assert_eq!(second.game_time(), 2);
     }
+
     #[test]
     fn shared_time_is_published_while_primary_worker_is_delayed() {
         let worlds = test_domain("delayed", &["primary", "derived"]);

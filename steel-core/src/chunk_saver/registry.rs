@@ -191,8 +191,9 @@ fn path_to_string(path: PathBuf) -> String {
 mod tests {
     use steel_registry::init_vanilla_registry;
 
-    use crate::config::WorldsConfig;
+    use crate::config::{DomainConfig, StorageSelection, WorldEntryConfig, WorldsConfig};
     use crate::worldgen::generator::registry::WorldGeneratorRegistry;
+    use steel_utils::Identifier;
 
     use super::WorldStorageRegistry;
 
@@ -202,22 +203,45 @@ mod tests {
         let storage = WorldStorageRegistry::new_with_builtins().expect("storage registry");
         let generators = WorldGeneratorRegistry::new_with_builtins().expect("generators");
         for (primary, derived) in [("disk", "disk"), ("disk", "ram"), ("ram", "ram")] {
-            let config: WorldsConfig = toml::from_str(&format!(
-                r#"
-[domains.example]
-default = true
-[[domains.example.worlds]]
-name = "primary"
-default = true
-generator = "minecraft:flat"
-storage = {{ type = "steel:{primary}" }}
-[[domains.example.worlds]]
-name = "derived"
-generator = "minecraft:flat"
-storage = {{ type = "steel:{derived}" }}
-"#
-            ))
-            .expect("config");
+            let worlds = [("primary", primary, true), ("derived", derived, false)]
+                .into_iter()
+                .map(|(name, backend, default)| WorldEntryConfig {
+                    name: name.to_owned(),
+                    generator: Identifier::new_static("minecraft", "flat"),
+                    default,
+                    seed: None,
+                    default_gamemode: None,
+                    difficulty: None,
+                    storage: Some(StorageSelection {
+                        kind: Identifier::new_static("steel", backend),
+                        config: None,
+                    }),
+                    nether_portal_target: None,
+                    end_portal_target: None,
+                    config: None,
+                })
+                .collect();
+            let config = WorldsConfig {
+                save_path: "saves".to_owned(),
+                seed: None,
+                default_gamemode: None,
+                difficulty: None,
+                storage: None,
+                player_storage: None,
+                domains: [(
+                    "example".to_owned(),
+                    DomainConfig {
+                        default: true,
+                        seed: None,
+                        default_gamemode: None,
+                        difficulty: None,
+                        storage: None,
+                        worlds,
+                    },
+                )]
+                .into(),
+            };
+
             let resolved = config
                 .validate_and_resolve(&generators, &storage)
                 .expect("resolve");
