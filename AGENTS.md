@@ -110,6 +110,13 @@ prek run --all-files                # Full local precommit suite
 Uses **nightly Rust**.
 Tooling: `ast-grep` is available for structural code search/rewrites.
 
+## Cursor Cloud specific instructions
+
+- `.cargo/config.toml` links with `lld` (`-fuse-ld=lld`). `ld.lld` must be installed or builds fail at link time. The toolchain is `nightly-2026-08-21` from `rust-toolchain.toml`; rustup on the base image lives at `/usr/local/cargo`.
+- The first compile of `steel-utils` downloads the Minecraft 26.2 server jar and extracts datapack and language files into `steel-utils/build_assets/`. That directory is generated.
+- `cargo test --workspace` is the full test command. On a 16GB machine it completed with `CARGO_BUILD_JOBS=2`.
+- `cargo build -p steel` produces `target/debug/steel`. From a working directory, the server creates `config/config.toml` on first launch and listens on port 25565. Startup selects an overworld spawn. A server-list status ping (handshake next-state status, then status request) returns the MOTD and protocol version without player authentication.
+
 ## Architecture
 
 Steel = Minecraft server in Rust.
